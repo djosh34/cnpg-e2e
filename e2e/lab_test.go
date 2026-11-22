@@ -42,8 +42,10 @@ const (
 	registryBucket = "registry"
 	// The machine that runs Ansible.
 	controllerIP = "10.77.0.5"
-	// Where the controller has the checkout's ansible/ and versions/.
-	deployDir = "/deploy"
+	// Where the controller has the checkout's ansible/, next to versions/
+	// as in the checkout. testcontainers copies a directory only into one
+	// that is there, such as /.
+	ansibleDir = "/ansible"
 	// k3s's containerd keeps its images and snapshots here. It cannot keep
 	// them in the node's own layer, where the overlay mounts of its
 	// snapshots fail, so a volume holds them.
@@ -187,13 +189,13 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 			// To the internet, for the downloads of the playbooks.
 			tcnetwork.WithBridgeNetwork(),
 			testcontainers.WithFiles(
-				testcontainers.ContainerFile{HostFilePath: "../ansible", ContainerFilePath: deployDir + "/ansible", FileMode: 0o755},
-				testcontainers.ContainerFile{HostFilePath: versionsFile, ContainerFilePath: deployDir + "/versions/versions.yaml", FileMode: 0o644},
+				testcontainers.ContainerFile{HostFilePath: "../ansible", ContainerFilePath: ansibleDir, FileMode: 0o755},
+				testcontainers.ContainerFile{HostFilePath: versionsFile, ContainerFilePath: "/versions/versions.yaml", FileMode: 0o644},
 			),
 			// The nodes are new on every run.
 			testcontainers.WithEnv(map[string]string{
 				"ANSIBLE_HOST_KEY_CHECKING": "False",
-				"ANSIBLE_CONFIG":            deployDir + "/ansible/ansible.cfg",
+				"ANSIBLE_CONFIG":            ansibleDir + "/ansible.cfg",
 			}),
 		},
 	})
@@ -394,7 +396,7 @@ func (l *lab) run(ctx context.Context, c labContainer) (*testcontainers.DockerCo
 // checkout's ansible/, and returns its output.
 func (l *lab) playbook(ctx context.Context, args ...string) (string, error) {
 	cmd := append([]string{"ansible-playbook"}, args...)
-	code, out, err := execIn(ctx, l.controller, cmd, tcexec.WithWorkingDir(deployDir+"/ansible"))
+	code, out, err := execIn(ctx, l.controller, cmd, tcexec.WithWorkingDir(ansibleDir))
 	if err != nil {
 		return out, err
 	}
