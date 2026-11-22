@@ -74,7 +74,6 @@ func inventory() string {
 type lab struct {
 	t          *testing.T
 	network    *testcontainers.DockerNetwork
-	containers map[string]*testcontainers.DockerContainer // by name
 	nodes      []*testcontainers.DockerContainer
 	controller *testcontainers.DockerContainer
 }
@@ -94,12 +93,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, er
 	if err != nil {
 		return nil, err
 	}
-	l := &lab{t: t, network: n, containers: map[string]*testcontainers.DockerContainer{}}
-	t.Cleanup(func() {
-		if t.Failed() {
-			l.printLogs()
-		}
-	})
+	l := &lab{t: t, network: n}
 	own := map[string]string{}
 	names, err := images.Names()
 	if err != nil {
@@ -327,7 +321,13 @@ func (l *lab) run(ctx context.Context, c labContainer) (*testcontainers.DockerCo
 	ctr, err := testcontainers.Run(ctx, c.image, append(opts, c.opts...)...)
 	testcontainers.CleanupContainer(l.t, ctr)
 	if ctr != nil {
-		l.containers[c.name] = ctr
+		// Cleanups run last first, so this one runs before the container
+		// goes.
+		l.t.Cleanup(func() {
+			if l.t.Failed() {
+				l.printLog(c.name, ctr)
+			}
+		})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("starting %s: %w", c.name, err)
@@ -346,22 +346,20 @@ func execIn(ctx context.Context, c *testcontainers.DockerContainer, cmd ...strin
 	return code, string(out), err
 }
 
-// printLogs prints the end of every container's log, for a failed test.
-func (l *lab) printLogs() {
+// printLog prints the end of a container's log, for a failed test.
+func (l *lab) printLog(name string, c *testcontainers.DockerContainer) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	for name, c := range l.containers {
-		logs, err := c.Logs(ctx)
-		var out []byte
-		if err == nil {
-			out, err = io.ReadAll(logs)
-			err = errors.Join(err, logs.Close())
-		}
-		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-		lines = lines[max(0, len(lines)-40):]
-		if err != nil {
-			lines = append(lines, err.Error())
-		}
-		l.t.Logf("the end of the log of %s:\n%s", name, strings.Join(lines, "\n"))
+	logs, err := c.Logs(ctx)
+	var out []byte
+	if err == nil {
+		out, err = io.ReadAll(logs)
+		err = errors.Join(err, logs.Close())
 	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	lines = lines[max(0, len(lines)-40):]
+	if err != nil {
+		lines = append(lines, err.Error())
+	}
+	l.t.Logf("the end of the log of %s:\n%s", name, strings.Join(lines, "\n"))
 }

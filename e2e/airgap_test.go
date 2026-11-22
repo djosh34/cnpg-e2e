@@ -50,6 +50,10 @@ func testAirgap(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	}
 	code, out, err := execIn(ctx, l.controller, "ansible", "nodes", "-m", "ping")
 	if err != nil || code != 0 {
+		for i, node := range l.nodes {
+			_, journal, err := execIn(ctx, node, "journalctl", "--unit", "sshd", "--lines", "30", "--no-pager")
+			t.Logf("sshd on %s: %v\n%s", nodeName(i), err, journal)
+		}
 		t.Fatalf("the controller does not reach every node over SSH: %d %v\n%s", code, err, out)
 	}
 	t.Logf("ansible nodes -m ping:\n%s", out)
