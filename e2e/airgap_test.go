@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,8 @@ const internet = "1.1.1.1:443"
 // testAirgap starts the lab, then checks that no node reaches the internet
 // while the machine does, and that the controller reaches every node over
 // SSH with Ansible. Last, it fills the registry, and so the store, with
-// every image of the versions file.
+// every image of the versions file. It writes what it saw to
+// results/airgap/report.txt.
 func testAirgap(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	l, err := startLab(ctx, t, m)
 	if err != nil {
@@ -56,11 +58,19 @@ func testAirgap(ctx context.Context, t *testing.T, m *versions.Manifest) {
 		}
 		t.Fatalf("the controller does not reach every node over SSH: %d %v\n%s", code, err, out)
 	}
-	t.Logf("ansible nodes -m ping:\n%s", out)
+	report := "ansible nodes -m ping:\n" + out
+	t.Logf("%s", report)
 
 	logf("filling the registry with every image of the versions file")
 	if err := registry.Fill(ctx, registry.Client(registryAddr), m, registryAddr); err != nil {
 		t.Fatal(err)
 	}
 	logf("the registry has the %d images", len(m.Pinned()))
+	report += "\nThe images in the registry:\n" + strings.Join(m.Pinned(), "\n") + "\n"
+	if err := os.MkdirAll("../results/airgap", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("../results/airgap/report.txt", []byte(report), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
