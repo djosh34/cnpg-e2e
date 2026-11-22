@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cnpg-cloudnative-pg
+description: CloudNativePG with one pod per node.
+type: application
+version: 0.1.0
+# The e2e test writes repository and version of each dependency from
+# charts.<name> of versions/versions.yaml, then helm dependency build pulls it.
+dependencies:
+  - name: cloudnative-pg

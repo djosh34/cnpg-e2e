@@ -1,0 +1,31 @@
+# golangci-lint v2.15.0 settings for e2e/: every ignored error is a
+# finding. The lint job of ci.yml runs it and fails on any nolint comment,
+# which no setting can turn off.
+version: "2"
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - errorlint
+    - nilerr
+    - nilnesserr
+    - forcetypeassert
+    - errchkjson
+    - rowserrcheck
+    - sqlclosecheck
+    - gocritic
+  settings:
+    errcheck:
+      check-blank: true
+      check-type-assertions: true
+      disable-default-exclusions: true
+    gocritic:
+      disable-all: true
+      enabled-checks:
+        - uncheckedInlineErr
+  exclusions:
+    presets: []
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false

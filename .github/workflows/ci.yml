@@ -1,0 +1,73 @@
+name: ci
+
+# Lint and unit tests of the e2e runner and its client (e2e/), on every pull
+# request and push to main. A ruleset on main requires both jobs.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # golangci-lint v2.15.0 with no nolint comment, and shellcheck on the
+  # runner's scripts.
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: e2e/go.mod
+          cache-dependency-path: e2e/go.sum
+      - name: golangci-lint v2.15.0
+        run: |
+          set -euo pipefail
+          v=2.15.0
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "https://github.com/golangci/golangci-lint/releases/download/v$v/golangci-lint-$v-linux-amd64.tar.gz"
+          echo "9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea  golangci-lint-$v-linux-amd64.tar.gz" | sha256sum -c -
+          tar -xzf "golangci-lint-$v-linux-amd64.tar.gz"
+          mv "golangci-lint-$v-linux-amd64/golangci-lint" golangci-lint
+      - name: No nolint in e2e/
+        run: |
+          set -euo pipefail
+          status=0
+          grep -rin --include='*.go' nolint e2e || status=$?
+          if ((status == 0)); then
+            echo "lint: nolint comments are not allowed" >&2
+            exit 1
+          fi
+          if ((status != 1)); then
+            exit "$status"
+          fi
+      - name: golangci-lint
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/golangci-lint" config verify
+          "$RUNNER_TEMP/golangci-lint" run ./...
+      - name: shellcheck
+        run: shellcheck e2e/*.sh
+
+  # go vet and go test. Without -scenario, TestScenario skips, so no
+  # container starts.
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: e2e/go.mod
+          cache-dependency-path: e2e/go.sum
+      - name: Vet and test
+        working-directory: e2e
+        run: |
+          set -euo pipefail
+          go vet ./...
+          go test ./...
