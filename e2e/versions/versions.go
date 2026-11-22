@@ -87,10 +87,6 @@ type PostgreSQL struct {
 	PostgresGID int    `yaml:"postgresGID"`
 }
 
-// Architectures are the architectures a manifest covers, as Go and k3s
-// name them. The run is amd64 only.
-var Architectures = []string{"amd64"}
-
 var (
 	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	// An exact chart version, not a range: Helm would pick a newer chart.
@@ -150,12 +146,11 @@ func (m *Manifest) check() error {
 	need(m.K3s.Version != "", "k3s.version")
 	need(strings.Contains(m.K3s.Image, "@sha256:"), "k3s.image with a digest")
 	need(len(m.K3s.Images) > 0, "k3s.images")
-	for _, arch := range Architectures {
-		a := m.K3s.Airgap[arch]
-		need(a.URL != "" && sha256Hex.MatchString(a.SHA256), "k3s.airgap."+arch+" with url and sha256")
-		need(sha256Hex.MatchString(m.Tools.Kubectl.SHA256[arch]), "tools.kubectl.sha256."+arch)
-		need(sha256Hex.MatchString(m.Tools.KubectlCNPG.SHA256[arch]), "tools.kubectl-cnpg.sha256."+arch)
-	}
+	// The run is amd64 only.
+	a := m.K3s.Airgap["amd64"]
+	need(a.URL != "" && sha256Hex.MatchString(a.SHA256), "k3s.airgap.amd64 with url and sha256")
+	need(sha256Hex.MatchString(m.Tools.Kubectl.SHA256["amd64"]), "tools.kubectl.sha256.amd64")
+	need(sha256Hex.MatchString(m.Tools.KubectlCNPG.SHA256["amd64"]), "tools.kubectl-cnpg.sha256.amd64")
 	need(m.Tools.Kubectl.Version != "", "tools.kubectl.version")
 	need(m.Tools.KubectlCNPG.Version != "", "tools.kubectl-cnpg.version")
 	need(m.Tools.RotateCA.URL != "" && sha256Hex.MatchString(m.Tools.RotateCA.SHA256),

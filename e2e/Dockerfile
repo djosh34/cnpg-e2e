@@ -1,7 +1,8 @@
 # The e2e image, built from the repository root, for amd64 only:
 # docker-in-docker with the e2e runner, the client binary and its two-line
-# Dockerfile, helm, kubectl, kubectl cnpg and k3s's script for new CAs. Each package, module and tool download of its RUN steps goes
-# through retry.sh; the base images are not.
+# Dockerfile, helm, kubectl, kubectl cnpg and k3s's script for new CAs.
+# Each package, module and tool download of its RUN steps goes through
+# retry.sh; the base images are not.
 # TestScenario of scenario_test.go builds and runs it, with the build
 # arguments below from versions/versions.yaml: the versions and sha256 of
 # kubectl and kubectl cnpg, and k3s's script for new CAs.
