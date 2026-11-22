@@ -63,6 +63,8 @@ const (
 	restoreScenario = "restore"
 	// The label of the CA's cache image that holds restoreData.
 	restoreLabel = "cnpg-e2e.restore"
+	// The label of every cache image with the ID of the build that made it.
+	buildLabel = "cnpg-e2e.build"
 )
 
 var (
@@ -216,7 +218,11 @@ func testCache(ctx context.Context, t *testing.T, m *versions.Manifest) {
 // returns.
 func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag string) {
 	built := t.Run("build the cache", func(t *testing.T) {
-		if err := prepareHost(ctx); err != nil {
+		node, err := images.Get(ctx, "node")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := prepareHost(ctx, node); err != nil {
 			t.Fatal(err)
 		}
 		l, err := startLab(ctx, t, m, nil)
@@ -251,8 +257,8 @@ func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag str
 }
 
 // save stops k3s and its pods on each node, then the nodes, the store and
-// the CA, and commits each as its cache image. The CA's image gets
-// restoreData as a label.
+// the CA, and commits each as its cache image, all with one build ID. The
+// CA's image gets restoreData as a label.
 func (l *lab) save(ctx context.Context, tag string) error {
 	logf("saving the lab as the cache %s", tag)
 	for i, node := range l.nodes {
@@ -276,11 +282,16 @@ func (l *lab) save(ctx context.Context, tag string) error {
 	if err != nil {
 		return err
 	}
+	build := make([]byte, 8)
+	if _, err := rand.Read(build); err != nil {
+		return err
+	}
 	for _, name := range cachedNames() {
 		// docker commit copies the container's labels into the image, and
 		// Ryuk removes whatever has the run's session ID once the lab's
 		// containers are gone, so the image gets none.
-		args := []string{"commit", "--change", "LABEL org.testcontainers.sessionId="}
+		args := []string{"commit", "--change", "LABEL org.testcontainers.sessionId=",
+			"--change", "LABEL " + buildLabel + "=" + hex.EncodeToString(build)}
 		if name == "acme" {
 			args = append(args, "--change", "LABEL "+restoreLabel+"="+base64.StdEncoding.EncodeToString(data))
 		}
@@ -305,7 +316,7 @@ func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := prepareHost(ctx); err != nil {
+	if err := prepareHost(ctx, from.images[nodeName(0)]); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
@@ -352,14 +363,18 @@ func getCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag strin
 	for _, name := range cachedNames() {
 		c.images[name] = cacheRef(name, tag)
 	}
-	// One cluster's images, all from here or all from the packages: a cache
-	// built here and one CI pushed have the same tag but different clusters.
-	local := true
+	// One cluster's images: a cache built here and one CI pushed have the
+	// same tag but different clusters, and an interrupted pull can leave
+	// both. The images here count only when all are of one build.
+	builds := map[string]bool{}
 	for _, image := range c.images {
-		if _, err := command(ctx, "docker", "image", "inspect", image); err != nil {
-			local = false
+		build, err := command(ctx, "docker", "image", "inspect", "--format", `{{index .Config.Labels "`+buildLabel+`"}}`, image)
+		if err != nil {
+			build = ""
 		}
+		builds[build] = true
 	}
+	local := len(builds) == 1 && !builds[""]
 	var missing error
 	if !local {
 		for _, image := range c.images {

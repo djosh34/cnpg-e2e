@@ -54,7 +54,11 @@ func TestScenario(t *testing.T) {
 		scenario(ctx, t, m)
 		return
 	}
-	if err := prepareHost(t.Context()); err != nil {
+	node, err := images.Get(t.Context(), "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareHost(t.Context(), node); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("the versions file %s: k3s %s", versionsFile, m.K3s.Version)
@@ -136,13 +140,10 @@ fi`
 // prepareHost runs hostSetup with the machine's own modprobe and sysctl,
 // from a privileged container in the machine's mount namespace, so a run
 // needs nothing on the machine besides Go and Docker. The changes hold until
-// the machine reboots.
-func prepareHost(ctx context.Context) error {
-	node, err := images.Get(ctx, "node")
-	if err != nil {
-		return err
-	}
-	_, err = command(ctx, "docker", "run", "--rm", "--privileged", "--pid=host", node,
+// the machine reboots. node is an image of the nodes, which has nsenter: a
+// fresh one, or a node of the cache.
+func prepareHost(ctx context.Context, node string) error {
+	_, err := command(ctx, "docker", "run", "--rm", "--privileged", "--pid=host", node,
 		"nsenter", "--target", "1", "--mount", "--", "sh", "-c", hostSetup)
 	return err
 }
