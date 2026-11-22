@@ -41,18 +41,17 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// The cache is the lab after install.yml without its helmfile play: a
-// clean three-node k3s with no charts and no app images, next to the store
-// and the company CA. It is one image per container: each node, the store
-// and the CA, each committed after a clean stop, as machines that shut
-// down. The packages of this repo hold them, tagged by a hash of
+// The cache is the lab after install.yml: a clean three-node k3s with no
+// charts and no app images, next to the store and the company CA. It is
+// one image per container: each node, the store and the CA, each committed
+// after a clean stop, as machines that shut down. The packages of this repo hold them, tagged by a hash of
 // everything that makes them (cacheTag). Only CI pushes them; a run that
 // finds no cache builds it here.
 //
 // The scenario cache makes sure the packages have the cache of this
 // checkout, building it when they do not, and with -push pushing it:
 //
-//	go -C e2e test -run '^TestScenario$' -count=1 -timeout 60m -v . -scenario cache -push
+//	go -C e2e test -run '^TestScenario$' -count=1 -timeout 50m -v . -scenario cache -push
 //
 // The scenario restore starts the lab from the cache, pulled or built here,
 // and checks that the cluster is Ready, that upgrade.yml changes nothing on
@@ -211,10 +210,10 @@ func testCache(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	}
 }
 
-// buildCache starts the lab with empty nodes, runs install.yml without
-// its helmfile play, waits until every node is Ready, runs it again to
-// check that it changes nothing, and saves the lab as the cache. Its
-// containers are gone when it returns.
+// buildCache starts the lab with empty nodes, runs install.yml, waits
+// until every node is Ready, runs it again to check that it changes
+// nothing, and saves the lab as the cache. Its containers are gone when it
+// returns.
 func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag string) {
 	built := t.Run("build the cache", func(t *testing.T) {
 		if err := prepareHost(ctx); err != nil {
@@ -226,7 +225,7 @@ func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag str
 		}
 		start := time.Now()
 		logf("running install.yml")
-		out, err := l.playbook(ctx, "install.yml", "--skip-tags", "helmfile")
+		out, err := l.playbook(ctx, "install.yml")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -235,7 +234,7 @@ func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag str
 			t.Fatal(err)
 		}
 		logf("running install.yml again, which changes nothing on the nodes")
-		out, err = l.playbook(ctx, "install.yml", "--skip-tags", "helmfile")
+		out, err = l.playbook(ctx, "install.yml")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -294,8 +293,8 @@ func (l *lab) save(ctx context.Context, tag string) error {
 
 // testRestore starts the lab from the cache of this checkout, pulled or
 // built here, and checks that every node turns Ready, that upgrade.yml
-// without its helmfile play changes nothing on the nodes, and that the
-// company CA issues a certificate. It writes what it saw to
+// changes nothing on the nodes, and that the company CA issues a
+// certificate. It writes what it saw to
 // results/restore/report.txt.
 func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	tag, err := cacheTag()
@@ -321,7 +320,7 @@ func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	report := fmt.Sprintf("The cache %s: every node Ready %s after the start.\n", tag, time.Since(start).Round(time.Second))
 
 	logf("running upgrade.yml, which changes nothing on the restored nodes")
-	out, err := l.playbook(ctx, "upgrade.yml", "--skip-tags", "helmfile")
+	out, err := l.playbook(ctx, "upgrade.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
