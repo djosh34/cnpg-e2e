@@ -7,6 +7,11 @@ RUN dnf install -y --setopt=install_weak_deps=False systemd openssh-server iprou
   && dnf clean all
 COPY --chmod=755 default-route.sh /usr/local/sbin/default-route
 COPY default-route.service /etc/systemd/system/
-RUN systemctl enable sshd.service default-route.service
+# sshd's PAM account check runs unix_chkpwd. On hosts with AppArmor, such as
+# Ubuntu, AppArmor's unix-chkpwd profile attaches to the node's copy too and
+# grants no capability to read Rocky's /etc/shadow of mode 0000: root may
+# read it as its owner at 0400.
+RUN systemctl enable sshd.service default-route.service \
+  && chmod 0400 /etc/shadow
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]
