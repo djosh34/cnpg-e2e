@@ -1,7 +1,6 @@
-# The e2e image, built from the repository root for the machine's own
-# architecture: docker-in-docker with the e2e runner, the client binary and
-# its two-line Dockerfile, helm, kubectl, kubectl cnpg and k3s's script for
-# new CAs. Each package, module and tool download of its RUN steps goes
+# The e2e image, built from the repository root, for amd64 only:
+# docker-in-docker with the e2e runner, the client binary and its two-line
+# Dockerfile, helm, kubectl, kubectl cnpg and k3s's script for new CAs. Each package, module and tool download of its RUN steps goes
 # through retry.sh; the base images are not.
 # TestScenario of scenario_test.go builds and runs it, with the build
 # arguments below from versions/versions.yaml: the versions and sha256 of
@@ -20,29 +19,17 @@ FROM alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34
 COPY e2e/retry.sh /usr/local/bin/retry
 WORKDIR /tools
 ARG KUBECTL_VERSION
-ARG KUBECTL_SHA256_AMD64
-ARG KUBECTL_SHA256_ARM64
+ARG KUBECTL_SHA256
 ARG CNPG_VERSION
-ARG CNPG_SHA256_AMD64
-ARG CNPG_SHA256_ARM64
+ARG CNPG_SHA256
 RUN set -eu; \
-  case $(uname -m) in \
-    x86_64) arch=amd64 cnpgarch=x86_64 \
-      helm=86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb \
-      kubectl=$KUBECTL_SHA256_AMD64 \
-      cnpg=$CNPG_SHA256_AMD64 ;; \
-    aarch64) arch=arm64 cnpgarch=arm64 \
-      helm=31c5794dd55c66a51e6b7d2e2ac7a114ae8b1de41ff1d9ba51748ac973b06a08 \
-      kubectl=$KUBECTL_SHA256_ARM64 \
-      cnpg=$CNPG_SHA256_ARM64 ;; \
-    *) echo "no tools for $(uname -m)" >&2; exit 1 ;; \
-  esac; \
-  retry wget -q -O helm.tar.gz "https://get.helm.sh/helm-v4.3.0-linux-$arch.tar.gz"; \
-  retry wget -q -O kubectl "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/$arch/kubectl"; \
-  retry wget -q -O cnpg.tar.gz "https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v$CNPG_VERSION/kubectl-cnpg_${CNPG_VERSION}_linux_$cnpgarch.tar.gz"; \
-  printf '%s  %s\n' "$helm" helm.tar.gz "$kubectl" kubectl "$cnpg" cnpg.tar.gz | sha256sum -c -; \
+  retry wget -q -O helm.tar.gz "https://get.helm.sh/helm-v4.3.0-linux-amd64.tar.gz"; \
+  retry wget -q -O kubectl "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"; \
+  retry wget -q -O cnpg.tar.gz "https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v$CNPG_VERSION/kubectl-cnpg_${CNPG_VERSION}_linux_x86_64.tar.gz"; \
+  printf '%s  %s\n' 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb helm.tar.gz \
+    "$KUBECTL_SHA256" kubectl "$CNPG_SHA256" cnpg.tar.gz | sha256sum -c -; \
   mkdir out; \
-  tar -xzf helm.tar.gz -C out --strip-components=1 "linux-$arch/helm"; \
+  tar -xzf helm.tar.gz -C out --strip-components=1 linux-amd64/helm; \
   tar -xzf cnpg.tar.gz -C out kubectl-cnpg; \
   install -m 755 kubectl out/kubectl
 # k3s's own script that makes new CAs, cross-signed by the old ones, for k3s

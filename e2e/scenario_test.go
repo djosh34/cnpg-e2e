@@ -60,7 +60,10 @@ func TestScenario(t *testing.T) {
 	if !ok {
 		t.Fatal("a run needs go test's -timeout")
 	}
-	ctx := context.Background()
+	// The image build and the scenario share one budget, which leaves 5 min
+	// before go test's -timeout for the copy-out of the results.
+	ctx, cancel := context.WithDeadline(context.Background(), deadline.Add(-5*time.Minute))
+	defer cancel()
 	c, err := testcontainers.Run(ctx, "",
 		testcontainers.WithDockerfile(testcontainers.FromDockerfile{
 			Context: "..", Dockerfile: "e2e/Dockerfile", BuildLogWriter: os.Stdout, BuildArgs: toolArgs(m.Tools),
@@ -71,10 +74,8 @@ func TestScenario(t *testing.T) {
 		testcontainers.WithHostConfigModifier(func(h *moby.HostConfig) { h.Privileged = true }),
 		testcontainers.WithCmd(*scenarioFlag),
 		testcontainers.WithLogConsumers(&testcontainers.StdoutLogConsumer{}),
-		// Its clock starts once the container runs, after the image build, so
-		// the 15 min it leaves before go test's -timeout are for the build
-		// and the copy-out of the results.
-		testcontainers.WithWaitStrategyAndDeadline(time.Until(deadline)-15*time.Minute, wait.ForExit()),
+		// ctx ends the wait first.
+		testcontainers.WithWaitStrategyAndDeadline(time.Until(deadline), wait.ForExit()),
 	)
 	testcontainers.CleanupContainer(t, c)
 	if c != nil {
@@ -97,14 +98,12 @@ func TestScenario(t *testing.T) {
 // versions file.
 func toolArgs(t versions.Tools) map[string]*string {
 	return map[string]*string{
-		"KUBECTL_VERSION":      &t.Kubectl.Version,
-		"KUBECTL_SHA256_AMD64": ptr(t.Kubectl.SHA256["amd64"]),
-		"KUBECTL_SHA256_ARM64": ptr(t.Kubectl.SHA256["arm64"]),
-		"CNPG_VERSION":         &t.KubectlCNPG.Version,
-		"CNPG_SHA256_AMD64":    ptr(t.KubectlCNPG.SHA256["amd64"]),
-		"CNPG_SHA256_ARM64":    ptr(t.KubectlCNPG.SHA256["arm64"]),
-		"ROTATE_CA_URL":        &t.RotateCA.URL,
-		"ROTATE_CA_SHA256":     &t.RotateCA.SHA256,
+		"KUBECTL_VERSION":  &t.Kubectl.Version,
+		"KUBECTL_SHA256":   ptr(t.Kubectl.SHA256["amd64"]),
+		"CNPG_VERSION":     &t.KubectlCNPG.Version,
+		"CNPG_SHA256":      ptr(t.KubectlCNPG.SHA256["amd64"]),
+		"ROTATE_CA_URL":    &t.RotateCA.URL,
+		"ROTATE_CA_SHA256": &t.RotateCA.SHA256,
 	}
 }
 

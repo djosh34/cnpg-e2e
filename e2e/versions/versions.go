@@ -88,8 +88,8 @@ type PostgreSQL struct {
 }
 
 // Architectures are the architectures a manifest covers, as Go and k3s
-// name them.
-var Architectures = []string{"amd64", "arm64"}
+// name them. The run is amd64 only.
+var Architectures = []string{"amd64"}
 
 var (
 	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)

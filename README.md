@@ -8,7 +8,7 @@ A three-node k3s cluster with CloudNativePG, and an e2e runner that breaks it in
 go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario switchover
 ```
 
-- **Needs** Docker that allows privileged containers, Go, the host's `fs.inotify.max_user_instances` at 1024 or more (`bash e2e/inotify.sh` raises it) and the kernel module `br_netfilter` (`sudo modprobe br_netfilter`).
+- **Needs** an amd64 machine with Docker that allows privileged containers, Go, the host's `fs.inotify.max_user_instances` at 1024 or more (`bash e2e/inotify.sh` raises it) and the kernel module `br_netfilter` (`sudo modprobe br_netfilter`).
 - **Results** go to `results/`. The test passes when the scenario passed.
 - **Scenarios** are the tags in `e2e/features/`. `always.feature` runs after each one.
 

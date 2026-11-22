@@ -2,3 +2,6 @@
 # repository root.
 *
 !e2e/
+# TestScenario copies these in when the container starts.
+e2e/features/
+e2e/monitoring/
