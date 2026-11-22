@@ -263,7 +263,10 @@ func (l *lab) save(ctx context.Context, tag string) error {
 		return err
 	}
 	for _, name := range cachedNames() {
-		args := []string{"commit"}
+		// docker commit copies the container's labels into the image, and
+		// Ryuk removes whatever has the run's session ID once the lab's
+		// containers are gone, so the image gets none.
+		args := []string{"commit", "--change", "LABEL org.testcontainers.sessionId="}
 		if name == "acme" {
 			args = append(args, "--change", "LABEL "+restoreLabel+"="+base64.StdEncoding.EncodeToString(data))
 		}
