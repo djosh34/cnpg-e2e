@@ -4,10 +4,12 @@ name: e2e
 # a new three-node k3s cluster with the charts of helm/ and the versions of
 # versions/versions.yaml, one scenario, then always.feature. scenarios picks
 # some by their tags; empty runs every scenario. The scenario airgap checks
-# the nodes, the controller and the fill on the runner's own Docker. Each
-# job uploads the run's files, also when its scenario failed. First, the
-# images job publishes the images of e2e/images that the packages do not
-# have yet.
+# the nodes, the controller and the fill on the runner's own Docker, and
+# restore starts a clean k3s cluster from the cache. Each job uploads the
+# run's files, also when its scenario failed. First, the images job
+# publishes the images of e2e/images that the packages do not have yet. When
+# restore runs, the cache job builds and publishes the cache when the
+# packages do not have it, and restore waits for it; no other scenario does.
 on:
   workflow_dispatch:
     inputs:
@@ -27,6 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       scenarios: ${{ steps.pick.outputs.scenarios }}
+      restore: ${{ steps.pick.outputs.restore }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -39,12 +42,18 @@ jobs:
           if [[ -n $WANTED ]]; then
             picked=$(tr -s ', ' '\n' <<<"$WANTED" | sed '/^$/d' | sort -u)
           else
-            # airgap has no feature file.
-            picked=$({ grep -ho '^ *@[a-z0-9-]*' e2e/features/*.feature | tr -d ' @' | grep -vx always && echo airgap; } | sort)
+            # airgap and restore have no feature file.
+            picked=$({ grep -ho '^ *@[a-z0-9-]*' e2e/features/*.feature | tr -d ' @' | grep -vx always && echo airgap && echo restore; } | sort)
           fi
-          scenarios=$(jq -Rnc '[inputs]' <<<"$picked")
-          echo "Scenarios: $scenarios"
+          # restore runs in its own job, after the cache job.
+          restore=false
+          if grep -qx restore <<<"$picked"; then
+            restore=true
+          fi
+          scenarios=$({ grep -vx restore <<<"$picked" || true; } | jq -Rnc '[inputs]')
+          echo "Scenarios: $scenarios, restore: $restore"
           echo "scenarios=$scenarios" >>"$GITHUB_OUTPUT"
+          echo "restore=$restore" >>"$GITHUB_OUTPUT"
 
   images:
     name: Publish the images
@@ -68,9 +77,62 @@ jobs:
           docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
           go -C e2e run ./cmd/images
 
+  # One cache publisher at a time, across branches: a second one waits,
+  # then finds the cache the first pushed under the same tag.
+  cache:
+    name: Publish the cache
+    needs: [plan, images]
+    if: needs.plan.outputs.restore == 'true'
+    concurrency:
+      group: e2e-cache
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: e2e/go.mod
+          cache-dependency-path: e2e/go.sum
+      - name: Log in to ghcr.io
+        env:
+          TOKEN: ${{ github.token }}
+        run: docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
+      - name: Build and push the cache when it is missing
+        run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 50m -v . -scenario cache -push
+
+  # restore pulls the cache the cache job published: -no-build.
+  restore:
+    name: restore
+    needs: cache
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: e2e/go.mod
+          cache-dependency-path: e2e/go.sum
+      - name: Scenario
+        run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 50m -v . -scenario restore -no-build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: restore
+          path: results/
+          if-no-files-found: error
+
   scenario:
     name: ${{ matrix.scenario }}
     needs: [plan, images]
+    if: needs.plan.outputs.scenarios != '[]'
     strategy:
       fail-fast: false
       matrix:
@@ -85,9 +147,6 @@ jobs:
         with:
           go-version-file: e2e/go.mod
           cache-dependency-path: e2e/go.sum
-      # The k3s nodes need br_netfilter and cannot load it themselves.
-      - name: Load br_netfilter
-        run: sudo modprobe br_netfilter
       - name: Scenario
         env:
           SCENARIO: ${{ matrix.scenario }}

@@ -1,0 +1,125 @@
+# Writes every file k3s reads on a node and copies the binary, the install
+# script and the airgap tarball from the controller. Then it starts k3s, or
+# restarts it when the binary or a file k3s reads at start changed, and
+# waits until the node is an etcd voter. A manifest that changed needs no
+# restart: k3s applies it when the file changes.
+
+- name: Make the directories of k3s
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/rancher/k3s, mode: "0755" }
+    - { path: /var/lib/rancher/k3s/server, mode: "0700" }
+    - { path: /var/lib/rancher/k3s/server/manifests, mode: "0700" }
+    - { path: /var/lib/rancher/k3s/agent/images, mode: "0755" }
+
+- name: Copy the k3s binary
+  ansible.builtin.copy:
+    src: "{{ downloads }}/k3s"
+    dest: /usr/local/bin/k3s
+    mode: "0755"
+  register: k3s_binary
+
+- name: Copy the install script of k3s
+  ansible.builtin.copy:
+    src: "{{ downloads }}/k3s-install.sh"
+    dest: /usr/local/bin/k3s-install.sh
+    mode: "0755"
+  register: k3s_install
+
+- name: Copy the airgap tarball, whose images k3s imports
+  ansible.builtin.copy:
+    src: "{{ downloads }}/k3s-airgap-images-amd64.tar.zst"
+    dest: /var/lib/rancher/k3s/agent/images/
+    mode: "0644"
+
+- name: Read the cluster's token from the first node
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/token
+  delegate_to: "{{ groups['nodes'][0] }}"
+  register: k3s_token
+  no_log: true
+  when: inventory_hostname != groups['nodes'][0]
+
+# The settings of k3s/config.yaml, and this node's own: its address, and on
+# the first node cluster-init, on every other the first node to join.
+- name: Write config.yaml
+  ansible.builtin.copy:
+    content: "{{ shared | combine(own, join, dns) | to_nice_yaml(indent=2) }}"
+    dest: /etc/rancher/k3s/config.yaml
+    mode: "0600"
+  vars:
+    first: "{{ groups['nodes'][0] }}"
+    shared: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/k3s/config.yaml') | from_yaml }}"
+    own:
+      node-ip: "{{ ansible_default_ipv4.address }}"
+    join: >-
+      {{ {'cluster-init': true} if inventory_hostname == first else
+         {'server': 'https://' ~ hostvars[first].ansible_default_ipv4.address ~ ':6443',
+          'token': k3s_token.content | b64decode | trim} }}
+    dns: "{{ {'resolv-conf': '/etc/rancher/k3s/resolv.conf'} if dns_server else {} }}"
+  register: k3s_config
+  no_log: true
+
+- name: Write registries.yaml, which sends every pull from ghcr.io to the cluster's registry on this node
+  ansible.builtin.copy:
+    content: |
+      mirrors:
+        ghcr.io:
+          endpoint:
+            - http://{{ ansible_default_ipv4.address }}:5000
+    dest: /etc/rancher/k3s/registries.yaml
+    mode: "0644"
+  register: k3s_registries
+
+- name: Write the DNS server of k3s and its pods
+  ansible.builtin.copy:
+    content: "nameserver {{ dns_server }}\n"
+    dest: /etc/rancher/k3s/resolv.conf
+    mode: "0644"
+  when: dns_server | length > 0
+  register: k3s_resolv
+
+- name: Copy the manifests k3s applies
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/k3s/manifests/"
+    dest: /var/lib/rancher/k3s/server/manifests/
+    mode: "0600"
+
+- name: Look for the systemd unit of k3s and its environment file
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: &unit_files
+    - /etc/systemd/system/k3s.service
+    - /etc/systemd/system/k3s.service.env
+  register: k3s_unit
+
+# Without a download, and without starting k3s: the next task does.
+- name: Install the systemd unit of k3s
+  ansible.builtin.command: /usr/local/bin/k3s-install.sh
+  environment:
+    INSTALL_K3S_SKIP_DOWNLOAD: "true"
+    INSTALL_K3S_SKIP_START: "true"
+  when: k3s_install is changed or not k3s_unit.results[0].stat.exists
+
+# A new install script can write the same files, which need no restart.
+- name: Look at the systemd unit of k3s and its environment file again
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: *unit_files
+  register: k3s_unit_now
+
+# systemd's start returns once k3s is ready, and k3s is ready only once its
+# etcd member is a voter, so the next node starts after this one joined.
+- name: Start k3s, or restart it when its binary, unit or a file it reads at start changed
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: "{{ 'restarted' if restart else 'started' }}"
+    enabled: true
+  vars:
+    restart: >-
+      {{ k3s_binary is changed or k3s_config is changed or k3s_registries is changed or k3s_resolv is changed
+         or k3s_unit.results | map(attribute='stat.checksum', default='') | list
+            != k3s_unit_now.results | map(attribute='stat.checksum', default='') | list }}

@@ -26,7 +26,7 @@ const internet = "1.1.1.1:443"
 // every image of the versions file. It writes what it saw to
 // results/airgap/report.txt.
 func testAirgap(ctx context.Context, t *testing.T, m *versions.Manifest) {
-	l, err := startLab(ctx, t, m)
+	l, err := startLab(ctx, t, m, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,15 +42,15 @@ func testAirgap(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	// cannot connect, and timeout with 124 when it does not within 10 s.
 	connect := "exec 3<>/dev/tcp/" + strings.Replace(internet, ":", "/", 1)
 	for i, node := range l.nodes {
-		code, out, err := execIn(ctx, node, "timeout", "10", "bash", "-c", connect)
+		code, out, err := execIn(ctx, node, []string{"timeout", "10", "bash", "-c", connect})
 		if err != nil || (code != 1 && code != 124) {
 			t.Errorf("%s reaches the internet, or the check failed otherwise: %d %v %s", nodeName(i), code, err, out)
 		}
 	}
-	code, out, err := execIn(ctx, l.controller, "ansible", "nodes", "-m", "ping")
+	code, out, err := execIn(ctx, l.controller, []string{"ansible", "nodes", "-m", "ping"})
 	if err != nil || code != 0 {
 		for i, node := range l.nodes {
-			_, journal, err := execIn(ctx, node, "journalctl", "--unit", "sshd", "--lines", "30", "--no-pager")
+			_, journal, err := execIn(ctx, node, []string{"journalctl", "--unit", "sshd", "--lines", "30", "--no-pager"})
 			t.Logf("sshd on %s: %v\n%s", nodeName(i), err, journal)
 		}
 		t.Fatalf("the controller does not reach every node over SSH: %d %v\n%s", code, err, out)

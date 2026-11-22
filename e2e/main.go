@@ -18,8 +18,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io/fs"
 	"os"
 
 	"github.com/djosh34/cnpg-e2e/e2e/versions"
@@ -53,14 +51,6 @@ func main() {
 }
 
 func run(scenario string) int {
-	if err := checkInotify(); err != nil {
-		say(os.Stderr, "e2e: %v\n", err)
-		return 2
-	}
-	if err := checkBrNetfilter(); err != nil {
-		say(os.Stderr, "e2e: %v\n", err)
-		return 2
-	}
 	if !scenarioTag.MatchString(scenario) {
 		say(os.Stderr, "e2e: %q is not a scenario tag\n", scenario)
 		return 2
@@ -102,41 +92,6 @@ func run(scenario string) int {
 		code = max(code, 2)
 	}
 	return code
-}
-
-// A run needs this many inotify instances. The limit is the host's, for
-// every container and user alike, and each k3s node takes many.
-const inotifyNeeded = 1024
-
-func checkInotify() error {
-	const file = "/proc/sys/fs/inotify/max_user_instances"
-	var limit int
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return err
-	}
-	if _, err := fmt.Sscan(string(data), &limit); err != nil {
-		return fmt.Errorf("%s: %w", file, err)
-	}
-	if limit < inotifyNeeded {
-		return fmt.Errorf("the host's fs.inotify.max_user_instances is %d; the three k3s nodes need at least %d. "+
-			"Raise it on the host with e2e/inotify.sh, "+
-			"or with: sudo sysctl -w fs.inotify.max_user_instances=%d",
-			limit, inotifyNeeded, inotifyNeeded)
-	}
-	return nil
-}
-
-// checkBrNetfilter checks that the host's kernel has br_netfilter, built in
-// or loaded, so that no iptables rule of a node makes the kernel load it
-// while the cluster starts.
-func checkBrNetfilter() error {
-	_, err := os.Stat("/proc/sys/net/bridge/bridge-nf-call-iptables")
-	if errors.Is(err, fs.ErrNotExist) {
-		return errors.New("the host's kernel has not loaded br_netfilter, which the k3s nodes need. " +
-			"Load it on the host with: sudo modprobe br_netfilter")
-	}
-	return err
 }
 
 var errNoScenario = errors.New("no scenario has that tag")

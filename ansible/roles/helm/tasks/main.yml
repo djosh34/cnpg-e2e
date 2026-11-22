@@ -1,0 +1,23 @@
+# Copies Helm, its diff plugin and helmfile from the controller to the node,
+# for root, who runs the reconcile.
+
+- name: Copy helm and helmfile
+  ansible.builtin.copy:
+    src: "{{ downloads }}/{{ item }}"
+    dest: /usr/local/bin/
+    mode: "0755"
+  loop:
+    - helm/linux-amd64/helm
+    - helmfile/helmfile
+
+- name: Make Helm's plugin directory
+  ansible.builtin.file:
+    path: /root/.local/share/helm/plugins
+    state: directory
+    mode: "0755"
+
+- name: Copy Helm's diff plugin
+  ansible.builtin.copy:
+    src: "{{ downloads }}/helm-diff/diff"
+    dest: /root/.local/share/helm/plugins/
+    mode: preserve

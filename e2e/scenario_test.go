@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/djosh34/cnpg-e2e/e2e/images"
 	"github.com/djosh34/cnpg-e2e/e2e/versions"
 	moby "github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
@@ -32,8 +33,9 @@ var scenarioFlag = flag.String("scenario", "", "the scenario to run: its tag, wi
 // image as one privileged container. Its last step copies the
 // run's files out to results/. testcontainers removes the container and its
 // volumes when the test ends, and Ryuk does when the test is killed. Without
-// -scenario it skips, so go test ./... starts no container. The scenario
-// airgap runs on the machine's own Docker instead (testAirgap).
+// -scenario it skips, so go test ./... starts no container. The scenarios of
+// labScenarios run on the machine's own Docker instead. A scenario readies
+// the machine's kernel (prepareHost) before it starts k3s.
 func TestScenario(t *testing.T) {
 	if *scenarioFlag == "" {
 		t.Skip("no -scenario")
@@ -42,15 +44,22 @@ func TestScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *scenarioFlag == airgapScenario {
+	if scenario, ok := labScenarios[*scenarioFlag]; ok {
 		deadline, ok := t.Deadline()
 		if !ok {
 			t.Fatal("a run needs go test's -timeout")
 		}
 		ctx, cancel := context.WithDeadline(context.Background(), deadline.Add(-time.Minute))
 		t.Cleanup(cancel)
-		testAirgap(ctx, t, m)
+		scenario(ctx, t, m)
 		return
+	}
+	node, err := images.Get(t.Context(), "node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareHost(t.Context(), node); err != nil {
+		t.Fatal(err)
 	}
 	t.Logf("the versions file %s: k3s %s", versionsFile, m.K3s.Version)
 	// testcontainers puts a directory under the parent of ContainerFilePath
@@ -107,6 +116,36 @@ func TestScenario(t *testing.T) {
 	if state.ExitCode != 0 {
 		t.Fatalf("the scenario %s exited with %d: 1 when it failed, 2 when it could not run", *scenarioFlag, state.ExitCode)
 	}
+}
+
+// labScenarios are the scenarios that run on the machine's own Docker, by
+// their names.
+var labScenarios = map[string]func(context.Context, *testing.T, *versions.Manifest){
+	airgapScenario:  testAirgap,
+	cacheScenario:   testCache,
+	restoreScenario: testRestore,
+}
+
+// hostSetup loads br_netfilter, which the nodes need and cannot load
+// themselves, and raises fs.inotify.max_user_instances to 1024: the limit
+// is the machine's, for every container alike, many machines have 128, and
+// each node takes many.
+const hostSetup = `set -eu
+modprobe br_netfilter
+have=$(sysctl -n fs.inotify.max_user_instances)
+if [ "$have" -lt 1024 ]; then
+  sysctl -w fs.inotify.max_user_instances=1024
+fi`
+
+// prepareHost runs hostSetup with the machine's own modprobe and sysctl,
+// from a privileged container in the machine's mount namespace, so a run
+// needs nothing on the machine besides Go and Docker. The changes hold until
+// the machine reboots. node is an image of the nodes, which has nsenter: a
+// fresh one, or a node of the cache.
+func prepareHost(ctx context.Context, node string) error {
+	_, err := command(ctx, "docker", "run", "--rm", "--privileged", "--pid=host", node,
+		"nsenter", "--target", "1", "--mount", "--", "sh", "-c", hostSetup)
+	return err
 }
 
 // toolArgs are the build arguments of e2e/Dockerfile with the tools of the

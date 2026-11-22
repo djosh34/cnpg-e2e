@@ -1,0 +1,26 @@
+# Brings the nodes of a running cluster to the files of this checkout: the
+# k3s binary, its config files and manifests, the airgap tarball, Helm, its
+# diff plugin and helmfile. One node at a time, and k3s restarts only on a
+# node whose binary or config changed. A node restored from a saved copy
+# gets the current files the same way.
+#
+#   ansible-playbook upgrade.yml
+- name: Download
+  ansible.builtin.import_playbook: download.yml
+
+- name: Upgrade k3s
+  hosts: nodes
+  serial: 1
+  pre_tasks:
+    - name: Look for k3s
+      ansible.builtin.stat:
+        path: /etc/systemd/system/k3s.service
+      register: k3s_installed
+
+    - name: Check that k3s is installed
+      ansible.builtin.assert:
+        that: k3s_installed.stat.exists
+        fail_msg: k3s is not installed on this node; install.yml installs it
+  roles:
+    - k3s
+    - helm
