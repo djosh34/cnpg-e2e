@@ -26,10 +26,12 @@ func TestParseLog(t *testing.T) {
 		"client: creating e2e_writes: no route",
 		"1250 1300 write k3s-2.example.test:5433 fail ERROR: cannot execute INSERT in a read-only transaction",
 		"1300 1310 connect k3s-3.example.test:5432 ok ",
+		// Longer than bufio.Scanner's default limit of 64 KiB.
+		"1400 1410 read - fail " + strings.Repeat("x", 70_000),
 		"1500 1600 writes - stopped ",
 	}, "\n"))
-	if len(log.lines) != 5 {
-		t.Fatalf("lines: got %d, want 5", len(log.lines))
+	if len(log.lines) != 6 {
+		t.Fatalf("lines: got %d, want 6", len(log.lines))
 	}
 	if n, server := log.lines[1].write(); n != "17" || server != "10.42.0.5" {
 		t.Errorf("write: got %q %q, want 17 10.42.0.5", n, server)

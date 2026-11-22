@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -114,9 +113,9 @@ func readClientLog(ctx context.Context) (clientLog, error) {
 // <result> <detail>", as e2e/client/main.go describes it.
 type logLine struct {
 	start, end int64  // unix ms
-	what       string // read, write, connect, read-attempt, write-attempt or writes
+	what       string // read, write, connect or writes
 	address    string // the <host>:<port> the client connected to, or -
-	result     string // ok or fail; started or worked for an attempt; stopped for writes
+	result     string // ok or fail; stopped for writes
 	detail     string
 }
 
@@ -128,11 +127,10 @@ type clientLog struct {
 func parseLog(raw string) clientLog {
 	var log clientLog
 	var other []string
-	scanner := bufio.NewScanner(strings.NewReader(raw))
-	for scanner.Scan() {
-		line, ok := parseLine(scanner.Text())
+	for text := range strings.SplitSeq(strings.TrimSuffix(raw, "\n"), "\n") {
+		line, ok := parseLine(text)
 		if !ok {
-			other = append(other, scanner.Text())
+			other = append(other, text)
 			continue
 		}
 		log.lines = append(log.lines, line)
