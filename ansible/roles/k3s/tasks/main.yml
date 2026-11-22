@@ -79,7 +79,7 @@
     content: "nameserver {{ dns_server }}\n"
     dest: /etc/rancher/k3s/resolv.conf
     mode: "0644"
-  when: dns_server
+  when: dns_server | length > 0
   register: k3s_resolv
 
 - name: Copy the manifests k3s applies
