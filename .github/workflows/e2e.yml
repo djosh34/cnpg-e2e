@@ -40,7 +40,7 @@ jobs:
             picked=$(tr -s ', ' '\n' <<<"$WANTED" | sed '/^$/d' | sort -u)
           else
             # airgap has no feature file.
-            picked=$({ grep -ho '^ *@[a-z0-9-]*' e2e/features/*.feature | tr -d ' @' | grep -vx always; echo airgap; } | sort)
+            picked=$({ grep -ho '^ *@[a-z0-9-]*' e2e/features/*.feature | tr -d ' @' | grep -vx always && echo airgap; } | sort)
           fi
           scenarios=$(jq -Rnc '[inputs]' <<<"$picked")
           echo "Scenarios: $scenarios"
