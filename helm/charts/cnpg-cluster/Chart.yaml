@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cnpg-cluster
+description: One CNPG Cluster, rendered from values/cluster.yaml.
+type: application
+version: 0.1.0

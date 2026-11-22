@@ -1,0 +1,339 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// The words of the vocabulary about WAL, the store, backups and restores,
+// and changes of the cluster's release.
+
+const (
+	// The backup a scenario takes, and the cluster it restores it into.
+	scenarioBackup  = "scenario"
+	restoredCluster = "pg-restore"
+)
+
+// writeRow writes one row on the primary: one WAL record, outside the
+// client.
+func writeRow(ctx context.Context, _ *scenario, _ args) error {
+	primary, err := clusterStatus(ctx, clusterName, "currentPrimary")
+	if err != nil {
+		return err
+	}
+	if err := rowTable(ctx, primary); err != nil {
+		return err
+	}
+	_, err = psql(ctx, primary, "postgres", "insert into e2e_row default values")
+	return err
+}
+
+// readCatalog reads every catalog table of every database on the instance,
+// which sets the hint bits of every catalog row there and so writes their
+// pages to WAL now, not later.
+func readCatalog(ctx context.Context, _ *scenario, a args) error {
+	pod := a.pods[0]
+	databases, err := psql(ctx, pod, "postgres", "select datname from pg_database where datallowconn")
+	if err != nil {
+		return err
+	}
+	const readAll = `do $$ declare t regclass; begin
+		for t in select oid::regclass from pg_class where relnamespace = 'pg_catalog'::regnamespace and relkind = 'r' loop
+			execute format('select count(*) from %s', t);
+		end loop; end $$`
+	for _, db := range strings.Fields(databases) {
+		if _, err := psql(ctx, pod, db, readAll); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeWAL writes at least N MB of WAL on the instance: rows of about 1 KB,
+// then a truncate, until then.
+func writeWAL(ctx context.Context, s *scenario, a args) error {
+	mb, pod := a.ns[0], a.pods[0]
+	start, err := psql(ctx, pod, "postgres", "select pg_current_wal_lsn()")
+	if err != nil {
+		return err
+	}
+	if _, err := psql(ctx, pod, "postgres", "create table if not exists e2e_load (n int, pad text)"); err != nil {
+		return err
+	}
+	for written := 0; written < mb; {
+		_, err := psql(ctx, pod, "postgres",
+			"insert into e2e_load select g, repeat(md5(g::text), 30) from generate_series(1, 40000) g; truncate e2e_load")
+		if err != nil {
+			return err
+		}
+		out, err := psql(ctx, pod, "postgres", fmt.Sprintf("select floor((pg_current_wal_lsn() - '%s') / 1048576)::bigint", start))
+		if err != nil {
+			return err
+		}
+		if written, err = strconv.Atoi(out); err != nil {
+			return err
+		}
+		s.detail = fmt.Sprintf("%d MB written", written)
+	}
+	return nil
+}
+
+// switchWAL makes the instance switch to a new WAL file.
+func switchWAL(ctx context.Context, s *scenario, a args) error {
+	file, err := psql(ctx, a.pods[0], "postgres", "select pg_walfile_name(pg_switch_wal())")
+	if err != nil {
+		return err
+	}
+	s.switched[a.pods[0]] = file
+	return nil
+}
+
+// walArchived: the store has the WAL file the instance switched away from.
+func walArchived(ctx context.Context, s *scenario, a args) error {
+	pod := a.pods[0]
+	file, ok := s.switched[pod]
+	if !ok {
+		return fmt.Errorf("no WAL switched on %s yet", pod)
+	}
+	out, err := psql(ctx, pod, "postgres", fmt.Sprintf(
+		`select coalesce(last_archived_wal >= '%s' collate "C", false) || ' ' || coalesce(last_archived_wal, 'none') from pg_stat_archiver`, file))
+	if err != nil {
+		return err
+	}
+	if archived, last, _ := strings.Cut(out, " "); archived != "true" {
+		return fmt.Errorf("%s has not archived %s yet; its last archived WAL file is %s", pod, file, last)
+	}
+	return nil
+}
+
+// walWaiting: the instance has WAL files that wait for the store.
+func walWaiting(ctx context.Context, _ *scenario, a args) error {
+	n, err := psql(ctx, a.pods[0], "postgres", "select count(*) from pg_ls_archive_statusdir() where name like '%.ready'")
+	if err != nil {
+		return err
+	}
+	if n == "0" {
+		return fmt.Errorf("no WAL waits for the store on %s", a.pods[0])
+	}
+	return nil
+}
+
+// caughtUp: the instance's pod has turned ready, and the instance streams
+// and has replayed the primary's WAL up to where it was a moment ago. The
+// timing table gives how far behind it was when its pod first turned ready,
+// which opens its node's read port.
+func caughtUp(ctx context.Context, s *scenario, a args) error {
+	pod := a.pods[0]
+	primary, err := clusterStatus(ctx, clusterName, "currentPrimary")
+	if err != nil {
+		return err
+	}
+	lsn, err := psql(ctx, primary, "postgres", "select pg_current_wal_lsn()")
+	if err != nil {
+		return err
+	}
+	if s.detail == "" {
+		ready, err := kubectl(ctx, "get", "pod", pod, "-n", namespace, "-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+		if err != nil {
+			return err
+		}
+		if ready == "True" {
+			behind, err := psql(ctx, pod, "postgres", fmt.Sprintf(
+				"select round((pg_wal_lsn_diff('%s', pg_last_wal_replay_lsn()) / 1048576)::numeric, 1)", lsn))
+			if err != nil {
+				return err
+			}
+			s.detail = behind + " MB behind when its pod turned ready"
+		}
+	}
+	if s.detail == "" {
+		return fmt.Errorf("the pod of %s is not ready", pod)
+	}
+	out, err := psql(ctx, pod, "postgres", fmt.Sprintf(
+		"select status = 'streaming' and pg_last_wal_replay_lsn() >= '%s' from pg_stat_wal_receiver", lsn))
+	if err != nil {
+		return err
+	}
+	if out != "t" {
+		return fmt.Errorf("%s does not stream or has not replayed up to %s", pod, lsn)
+	}
+	return nil
+}
+
+// idleAfterSwitch: the instance's insert position is 40 bytes, a page
+// header, past its flush position at the start of a WAL file, and stays there
+// for 30 s: an idle primary just after a WAL switch, with no checkpoint after
+// it. A former primary that rewinds onto it waits for its next WAL record.
+func idleAfterSwitch(ctx context.Context, _ *scenario, a args) error {
+	const position = `select (pg_current_wal_insert_lsn() - pg_current_wal_flush_lsn())::bigint || ' ' ||
+		((pg_current_wal_flush_lsn() - '0/0'::pg_lsn) % setting::bigint)::bigint
+		from pg_settings where name = 'wal_segment_size'`
+	end := time.Now().Add(30 * time.Second)
+	for {
+		out, err := psql(ctx, a.pods[0], "postgres", position)
+		if err != nil {
+			return err
+		}
+		if out != "40 0" {
+			return fmt.Errorf("on %s, the insert position minus the flush position, and the flush position in its WAL file: %s", a.pods[0], out)
+		}
+		if time.Now().After(end) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+// changeImage: the cluster's release gets the manifest's
+// postgresql.imageName, the rollout scenario's second image. CNPG restarts
+// every instance on it, the primary last, in place.
+func changeImage(ctx context.Context, s *scenario, _ args) error {
+	s.primaryOut = true
+	return s.upgradeCluster(ctx, "--set-string", "postgresql.imageName="+manifest.PostgreSQL.ImageName)
+}
+
+// onNewImage: every instance runs the manifest's postgresql.imageName and
+// is ready.
+func onNewImage(ctx context.Context, _ *scenario, _ args) error {
+	pods, err := instances(ctx, clusterName)
+	if err != nil {
+		return err
+	}
+	if len(pods) != nodeCount {
+		return fmt.Errorf("instances: %v", pods)
+	}
+	for _, pod := range pods {
+		out, err := kubectl(ctx, "get", "pod", pod, "-n", namespace, "-o",
+			`jsonpath={.spec.containers[?(@.name=="postgres")].image} {.status.containerStatuses[?(@.name=="postgres")].ready}`)
+		if err != nil {
+			return err
+		}
+		if out != manifest.PostgreSQL.ImageName+" true" {
+			return fmt.Errorf("the image of %s, and whether it is ready: %s", pod, out)
+		}
+	}
+	return nil
+}
+
+func backUp(ctx context.Context, _ *scenario, _ args) error {
+	return takeBackup(ctx, scenarioBackup)
+}
+
+func backupDone(ctx context.Context, _ *scenario, _ args) error {
+	return backupCompleted(ctx, scenarioBackup)
+}
+
+// upgradeCluster changes the cluster's release: helm upgrade with the values
+// it has, and more.
+func (s *scenario) upgradeCluster(ctx context.Context, more ...string) error {
+	args := append([]string{"upgrade", clusterRelease, s.w.cluster.chart, "--namespace", namespace, "--reuse-values"}, more...)
+	_, err := helm(ctx, 5*time.Minute, args...)
+	return err
+}
+
+// restore installs the cluster's chart with the cluster's values as
+// pg-restore, a new cluster that restores the cluster's backups and WAL from
+// the store. It gets its own rw LoadBalancer and no read LoadBalancer.
+func restore(ctx context.Context, s *scenario, _ args) error {
+	args := append([]string{"install", restoredCluster, s.w.cluster.chart, "--namespace", namespace}, s.w.cluster.values...)
+	args = append(args, "--set", "cluster.name="+restoredCluster, "--set", "recovery.enabled=true",
+		"--set", "recovery.sourceCluster="+clusterName, "--set", "rwLoadBalancer.name="+restoredCluster+"-rw-lb",
+		"--set", "readLoadBalancer=null")
+	_, err := helm(ctx, 5*time.Minute, args...)
+	return err
+}
+
+func restoreHealthy(ctx context.Context, _ *scenario, _ args) error {
+	return healthy(ctx, restoredCluster)
+}
+
+// noneLostInRestore: every write the client got acknowledged is in
+// e2e_writes on the primary of pg-restore. The client must have stopped
+// writing before.
+func noneLostInRestore(ctx context.Context, s *scenario, _ args) error {
+	log, err := s.clientLog(ctx)
+	if err != nil {
+		return err
+	}
+	if _, stopped := log.writesStopped(); s.writes && !stopped {
+		return errors.New("writing must stop before the restore")
+	}
+	return s.acknowledgedOn(ctx, restoredCluster)
+}
+
+// restoreCompliant and compliant: every instance of the cluster, pg-restore
+// or the cluster's own, reported each of the four checks of the compliance
+// query as 0 in the last 30 s.
+func restoreCompliant(ctx context.Context, s *scenario, _ args) error {
+	return s.compliant(ctx, restoredCluster)
+}
+
+func compliant(ctx context.Context, s *scenario, _ args) error {
+	return s.compliant(ctx, clusterName)
+}
+
+func (s *scenario) compliant(ctx context.Context, cluster string) error {
+	pods, err := instances(ctx, cluster)
+	if err != nil {
+		return err
+	}
+	if len(pods) != nodeCount {
+		return fmt.Errorf("instances of %s: %v", cluster, pods)
+	}
+	selector := fmt.Sprintf(`namespace=%q, cluster=%q`, namespace, cluster)
+	zero, err := s.w.mon.pods(ctx, fmt.Sprintf(`count by (pod) (
+		(cnpg_compliance_violations{%s} == 0)
+		and on (pod, rule, check) (time() - timestamp(cnpg_compliance_violations{%s}) < 30)) == 4`, selector, selector))
+	if err != nil {
+		return err
+	}
+	for _, pod := range pods {
+		if !zero[pod] {
+			return fmt.Errorf("%s did not report the four compliance checks as 0 in the last 30 s", pod)
+		}
+	}
+	return nil
+}
+
+// breakStore stops or pauses the store; storeStarts brings it back.
+func breakStore(how string) func(context.Context, *scenario, args) error {
+	return func(ctx context.Context, s *scenario, _ args) error {
+		if s.store != "" {
+			return fmt.Errorf("the store is %s already", s.store)
+		}
+		// Kept before the break, which can fail halfway: the store is then
+		// broken all the same, and endOutages brings it back.
+		s.store = how
+		var err error
+		if how == "stopped" {
+			err = stopStore(ctx)
+		} else {
+			err = pauseStore(ctx)
+		}
+		if err != nil {
+			return err
+		}
+		logf("the store is %s", how)
+		return nil
+	}
+}
+
+func storeStarts(ctx context.Context, s *scenario, _ args) error {
+	if s.store == "" {
+		return errors.New("the store is not broken")
+	}
+	if err := restoreStore(ctx, s.store == "stopped"); err != nil {
+		return err
+	}
+	s.store = ""
+	logf("the store is back")
+	return nil
+}

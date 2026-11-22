@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cnpg-cert-manager
+description: cert-manager with its CRDs.
+type: application
+version: 0.1.0
+# The e2e test writes repository and version of each dependency from
+# charts.<name> of versions/versions.yaml, then helm dependency build pulls it.
+dependencies:
+  - name: cert-manager

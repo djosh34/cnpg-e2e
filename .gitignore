@@ -1,0 +1,5 @@
+# What helm dependency build writes next to a wrapper chart.
+helm/charts/cnpg-*/charts/
+helm/charts/cnpg-*/Chart.lock
+# What a scenario run copies out.
+results/
