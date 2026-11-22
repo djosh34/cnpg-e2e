@@ -79,10 +79,10 @@ func Get(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if docker(ctx, nil, "image", "inspect", image) == nil {
+	if docker(ctx, "image", "inspect", image) == nil {
 		return image, nil
 	}
-	pullErr := docker(ctx, nil, "pull", "--quiet", image)
+	pullErr := docker(ctx, "pull", "--quiet", image)
 	if pullErr == nil {
 		return image, nil
 	}
@@ -114,7 +114,7 @@ func Publish(ctx context.Context, rc *regclient.RegClient) error {
 		if err := build(ctx, name, image); err != nil {
 			return err
 		}
-		if err := docker(ctx, nil, "push", "--quiet", image); err != nil {
+		if err := docker(ctx, "push", "--quiet", image); err != nil {
 			return err
 		}
 		log.Printf("images: pushed %s", image)
@@ -145,21 +145,19 @@ func build(ctx context.Context, name, image string) error {
 	if err := errors.Join(err, tw.Close()); err != nil {
 		return err
 	}
-	return docker(ctx, &archive, "build", "--tag", image, "-")
+	cmd := exec.CommandContext(ctx, "docker", "build", "--tag", image, "-")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = &archive, os.Stdout, os.Stdout
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker build of %s: %w", image, err)
+	}
+	return nil
 }
 
-// docker runs the docker command with stdin. A failure's error holds its
-// output; docker build prints its own as it goes.
-func docker(ctx context.Context, stdin *bytes.Buffer, args ...string) error {
+// docker runs the docker command. A failure's error holds its output.
+func docker(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
-	if args[0] == "build" {
-		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stdout
-	}
-	if stdin != nil {
-		cmd.Stdin = stdin
-	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(out.Bytes()))
 	}

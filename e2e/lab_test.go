@@ -20,6 +20,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	mobynet "github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	tcnetwork "github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/crypto/ssh"
@@ -110,17 +111,17 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, er
 	if err != nil {
 		return nil, err
 	}
-	if err := l.startACME(ctx, root, own["acme"]); err != nil {
+	if err := l.runACME(ctx, root, own["acme"]); err != nil {
 		return nil, err
 	}
-	if err := l.startStore(ctx, root); err != nil {
+	if err := l.runStore(ctx, root); err != nil {
 		return nil, err
 	}
-	if err := l.startRegistry(ctx, root, m.Registry.Image); err != nil {
+	if err := l.runRegistry(ctx, root, m.Registry.Image); err != nil {
 		return nil, err
 	}
 	logf("starting the monitoring")
-	if err := l.startMonitoring(ctx, root, own); err != nil {
+	if err := l.runMonitoring(ctx, root, own); err != nil {
 		return nil, err
 	}
 	logf("starting the nodes and the controller")
@@ -139,7 +140,8 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, er
 					h.CgroupnsMode = moby.CgroupnsModePrivate
 					h.Tmpfs = map[string]string{"/run": "", "/run/lock": "", "/tmp": ""}
 				}),
-				testcontainers.WithWaitStrategy(wait.ForExec([]string{"systemctl", "is-active", "sshd", "default-route"}).
+				// systemctl is-active of two units holds when either is.
+				testcontainers.WithWaitStrategy(wait.ForExec([]string{"sh", "-c", "systemctl is-active sshd && systemctl is-active default-route"}).
 					WithStartupTimeout(2 * time.Minute)),
 			},
 		})
@@ -176,8 +178,8 @@ func sshKey() (private, authorized string, _ error) {
 	return string(pem.EncodeToMemory(block)), string(ssh.MarshalAuthorizedKey(sshPub)), nil
 }
 
-// startACME starts the company CA and sets it up.
-func (l *lab) startACME(ctx context.Context, root *ca, image string) error {
+// runACME starts the company CA and sets it up.
+func (l *lab) runACME(ctx context.Context, root *ca, image string) error {
 	cert, key, err := root.serverCert(acmeName)
 	if err != nil {
 		return err
@@ -193,9 +195,9 @@ func (l *lab) startACME(ctx context.Context, root *ca, image string) error {
 	return err
 }
 
-// startStore starts the store, sets it up and makes the registry's bucket.
+// runStore starts the store, sets it up and makes the registry's bucket.
 // Its data is on volumes, not in the container's own layer.
-func (l *lab) startStore(ctx context.Context, root *ca) error {
+func (l *lab) runStore(ctx context.Context, root *ca) error {
 	cert, key, err := root.serverCert(s3Name)
 	if err != nil {
 		return err
@@ -222,9 +224,9 @@ func (l *lab) startStore(ctx context.Context, root *ca) error {
 	return newS3(root, s3RootAccess, s3RootSecret).want(ctx, http.MethodPut, "/"+registryBucket, "", 200)
 }
 
-// startRegistry starts the writable registry on the registry bucket, with
+// runRegistry starts the writable registry on the registry bucket, with
 // the registry image of the versions file, and waits until it answers.
-func (l *lab) startRegistry(ctx context.Context, root *ca, image string) error {
+func (l *lab) runRegistry(ctx context.Context, root *ca, image string) error {
 	_, err := l.run(ctx, labContainer{
 		name: "registry", ip: registryIP, image: image,
 		files: map[string]string{"/etc/distribution/config.yml": registryConfig, "/etc/distribution/ca.crt": string(root.certPEM)},
@@ -247,9 +249,9 @@ func (l *lab) startRegistry(ctx context.Context, root *ca, image string) error {
 	return nil
 }
 
-// startMonitoring starts the OTel service, Prometheus, Alertmanager and
+// runMonitoring starts the OTel service, Prometheus, Alertmanager and
 // Grafana, and waits until each answers.
-func (l *lab) startMonitoring(ctx context.Context, root *ca, own map[string]string) error {
+func (l *lab) runMonitoring(ctx context.Context, root *ca, own map[string]string) error {
 	cert, key, err := root.serverCert(otelName)
 	if err != nil {
 		return err
@@ -285,7 +287,7 @@ type labContainer struct {
 	// services do not run as root. sshd wants its SSH files in secrets,
 	// readable by root only.
 	files, secrets map[string]string
-	opts            []testcontainers.ContainerCustomizer
+	opts           []testcontainers.ContainerCustomizer
 }
 
 // run starts the container. testcontainers removes it when the test ends.
@@ -338,7 +340,7 @@ func (l *lab) run(ctx context.Context, c labContainer) (*testcontainers.DockerCo
 // execIn runs a command in a container and returns its exit code and its
 // output, stdout and stderr together.
 func execIn(ctx context.Context, c *testcontainers.DockerContainer, cmd ...string) (int, string, error) {
-	code, reader, err := c.Exec(ctx, cmd)
+	code, reader, err := c.Exec(ctx, cmd, tcexec.Multiplexed())
 	if err != nil {
 		return 0, "", fmt.Errorf("%s: %w", strings.Join(cmd, " "), err)
 	}

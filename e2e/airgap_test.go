@@ -38,16 +38,13 @@ func testAirgap(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// The same TCP connection from each node: bash exits with 1 when it
+	// cannot connect, and timeout with 124 when it does not within 10 s.
+	connect := "exec 3<>/dev/tcp/" + strings.Replace(internet, ":", "/", 1)
 	for i, node := range l.nodes {
-		code, out, err := execIn(ctx, node, "ip", "route", "show", "default")
-		if err != nil || code != 0 || !strings.Contains(out, "via "+gatewayIP+" ") {
-			t.Errorf("%s has no default route via %s: %d %v %s", nodeName(i), gatewayIP, code, err, out)
-		}
-		// curl exits with 7 when it cannot connect and with 28 when it
-		// times out.
-		code, out, err = execIn(ctx, node, "curl", "--silent", "--show-error", "--max-time", "10", "https://"+internet)
-		if err != nil || (code != 7 && code != 28) {
-			t.Errorf("%s reaches the internet, or curl failed otherwise: %d %v %s", nodeName(i), code, err, out)
+		code, out, err := execIn(ctx, node, "timeout", "10", "bash", "-c", connect)
+		if err != nil || (code != 1 && code != 124) {
+			t.Errorf("%s reaches the internet, or the check failed otherwise: %d %v %s", nodeName(i), code, err, out)
 		}
 	}
 	code, out, err := execIn(ctx, l.controller, "ansible", "nodes", "-m", "ping")

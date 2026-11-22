@@ -68,7 +68,7 @@ func startStore(ctx context.Context, root *ca) error {
 	}
 	err = container{
 		name: "s3", ip: s3IP, image: s3Image,
-		opts: []string{"--entrypoint", "/usr/local/bin/versitygw"},
+		opts:  []string{"--entrypoint", "/usr/local/bin/versitygw"},
 		args:  s3Args,
 		files: map[string]string{"/tls/tls.crt": string(cert), "/tls/tls.key": string(key)},
 		dirs:  []string{"/data", "/iam", "/versions"},
