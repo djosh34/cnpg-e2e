@@ -1,0 +1,15 @@
+# Installs k3s on the nodes of the group nodes, every one a server with
+# embedded etcd, one node at a time: the first starts the cluster, and each
+# other joins it. Then each node gets Helm, its diff plugin and helmfile.
+# A second run changes nothing and restarts nothing.
+#
+#   ansible-playbook install.yml
+- name: Download
+  ansible.builtin.import_playbook: download.yml
+
+- name: Install k3s
+  hosts: nodes
+  serial: 1
+  roles:
+    - k3s
+    - helm

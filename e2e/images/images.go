@@ -26,7 +26,7 @@ import (
 	"github.com/regclient/regclient/types/ref"
 )
 
-//go:embed acme alertmanager controller dns grafana node otel prometheus
+//go:embed acme alertmanager controller dns grafana node otel prometheus s3
 var files embed.FS
 
 // Names are the names of the images, their directories.

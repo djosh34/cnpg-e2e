@@ -3,3 +3,5 @@ helm/charts/cnpg-*/charts/
 helm/charts/cnpg-*/Chart.lock
 # What a scenario run copies out.
 results/
+# What download.yml of ansible/ downloads.
+ansible/downloads/

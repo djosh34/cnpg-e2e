@@ -120,8 +120,7 @@ func checkInotify() error {
 	}
 	if limit < inotifyNeeded {
 		return fmt.Errorf("the host's fs.inotify.max_user_instances is %d; the three k3s nodes need at least %d. "+
-			"Raise it on the host with e2e/inotify.sh, "+
-			"or with: sudo sysctl -w fs.inotify.max_user_instances=%d",
+			"TestScenario raises it, or: sudo sysctl -w fs.inotify.max_user_instances=%d",
 			limit, inotifyNeeded, inotifyNeeded)
 	}
 	return nil

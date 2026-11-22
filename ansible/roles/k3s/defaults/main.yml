@@ -1,0 +1,6 @@
+# Where download.yml put the files on the controller.
+downloads: "{{ playbook_dir }}/downloads"
+
+# The DNS server of k3s and its pods. Empty: the node's own
+# /etc/resolv.conf.
+dns_server: ""

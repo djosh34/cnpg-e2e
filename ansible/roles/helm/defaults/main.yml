@@ -1,0 +1,2 @@
+# Where download.yml put the files on the controller.
+downloads: "{{ playbook_dir }}/downloads"

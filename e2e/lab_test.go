@@ -27,12 +27,14 @@ import (
 )
 
 // The lab is what the e2e test starts on the machine's own Docker, with only
-// Go and Docker: the services outside k3s, three empty nodes and the
-// controller, each a container at a fixed address on one network with no
-// route to the internet. The machine itself reaches them on that network.
-// The images are this repo's packages, or built here where a package does
-// not have one yet (images.Get). testcontainers removes every container and
-// the network when the test ends, and Ryuk does when the test is killed.
+// Go and Docker: the services outside k3s, three nodes and the controller,
+// each a container at a fixed address on one network with no route to the
+// internet. The machine itself reaches them on that network, and the
+// controller also has a network to the internet, as the machine that runs
+// Ansible in production. The images are this repo's packages, or built here
+// where a package does not have one yet (images.Get). testcontainers removes
+// every container and the network when the test ends, and Ryuk does when the
+// test is killed.
 const (
 	// The writable registry that the fill copies the images into, on the
 	// store's registry bucket, which the registry of every node reads too.
@@ -40,6 +42,12 @@ const (
 	registryBucket = "registry"
 	// The machine that runs Ansible.
 	controllerIP = "10.77.0.5"
+	// Where the controller has the checkout's ansible/ and versions/.
+	deployDir = "/deploy"
+	// k3s's containerd keeps its images and snapshots here. It cannot keep
+	// them in the node's own layer, where the overlay mounts of its
+	// snapshots fail, so a volume holds them.
+	containerdDir = "/var/lib/rancher/k3s/agent/containerd"
 )
 
 var registryAddr = registryIP + ":5000"
@@ -63,38 +71,36 @@ http:
   secret: example-registry-secret
 `
 
-// The inventory of the controller's Ansible.
+// The inventory of the controller's Ansible: the nodes by name and address,
+// and the lab's DNS for k3s, since the nodes' own resolv.conf names
+// Docker's resolver on their loopback.
 func inventory() string {
 	lines := []string{"[nodes]"}
 	for i := range nodeCount {
-		lines = append(lines, nodeHost(i))
+		lines = append(lines, nodeHost(i)+" ansible_host="+nodeIP(i))
 	}
-	return strings.Join(append(lines, "", "[nodes:vars]", "ansible_user=root"), "\n") + "\n"
+	return strings.Join(append(lines, "", "[nodes:vars]", "ansible_user=root", "dns_server="+dnsIP), "\n") + "\n"
 }
 
 type lab struct {
 	t          *testing.T
 	network    *testcontainers.DockerNetwork
+	root       *ca
+	bao        *openbao
 	nodes      []*testcontainers.DockerContainer
 	controller *testcontainers.DockerContainer
+	// Every container by its name.
+	containers map[string]*testcontainers.DockerContainer
 }
 
 // startLab starts the lab: the services outside k3s, set up and answering,
 // three nodes with sshd running, and the controller with an SSH key that
-// every node takes.
-func startLab(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, error) {
-	root, err := newCA()
-	if err != nil {
-		return nil, err
-	}
-	n, err := tcnetwork.New(ctx, tcnetwork.WithInternal(), tcnetwork.WithIPAM(&mobynet.IPAM{
-		Config: []mobynet.IPAMConfig{{Subnet: netip.MustParsePrefix(subnet), Gateway: netip.MustParseAddr(gatewayIP)}},
-	}))
-	testcontainers.CleanupNetwork(t, n)
-	if err != nil {
-		return nil, err
-	}
-	l := &lab{t: t, network: n}
+// every node takes. Without a cache the nodes are empty and the store and
+// the company CA new. From a cache the store, the CA and the nodes are its
+// images: the CA's root is the cache's, OpenBao is unsealed with its key,
+// and the store and the CA get new TLS certificates.
+func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cache) (*lab, error) {
+	l := &lab{t: t, containers: map[string]*testcontainers.DockerContainer{}}
 	own := map[string]string{}
 	names, err := images.Names()
 	if err != nil {
@@ -105,23 +111,45 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, er
 			return nil, err
 		}
 	}
-
-	logf("starting the DNS, the company CA, the store and the registry")
-	_, err = l.run(ctx, labContainer{name: "dns", ip: dnsIP, image: own["dns"], files: map[string]string{"/etc/coredns/hosts": hosts()}})
+	// The image of each container the cache holds.
+	image := func(name, fresh string) string {
+		if from == nil {
+			return fresh
+		}
+		return from.images[name]
+	}
+	if from == nil {
+		if l.root, err = newCA(); err != nil {
+			return nil, err
+		}
+	} else {
+		l.root = from.root
+	}
+	n, err := tcnetwork.New(ctx, tcnetwork.WithInternal(), tcnetwork.WithIPAM(&mobynet.IPAM{
+		Config: []mobynet.IPAMConfig{{Subnet: netip.MustParsePrefix(subnet), Gateway: netip.MustParseAddr(gatewayIP)}},
+	}))
+	testcontainers.CleanupNetwork(t, n)
 	if err != nil {
 		return nil, err
 	}
-	if err := l.runACME(ctx, root, own["acme"]); err != nil {
+	l.network = n
+
+	logf("starting the DNS, the company CA, the store and the registry")
+	_, err = l.run(ctx, labContainer{name: "dns", ip: dnsIP, image: own["dns"], dockerDNS: true, files: map[string]string{"/etc/coredns/hosts": hosts()}})
+	if err != nil {
 		return nil, err
 	}
-	if err := l.runStore(ctx, root); err != nil {
+	if err := l.runACME(ctx, image("acme", own["acme"]), from); err != nil {
 		return nil, err
 	}
-	if err := l.runRegistry(ctx, root, m.Registry.Image); err != nil {
+	if err := l.runStore(ctx, image("s3", own["s3"]), from != nil); err != nil {
+		return nil, err
+	}
+	if err := l.runRegistry(ctx, m.Registry.Image); err != nil {
 		return nil, err
 	}
 	logf("starting the monitoring")
-	if err := l.runMonitoring(ctx, root, own); err != nil {
+	if err := l.runMonitoring(ctx, own); err != nil {
 		return nil, err
 	}
 	logf("starting the nodes and the controller")
@@ -131,7 +159,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, er
 	}
 	for i := range nodeCount {
 		node, err := l.run(ctx, labContainer{
-			name: nodeName(i), ip: nodeIP(i), image: own["node"],
+			name: nodeName(i), ip: nodeIP(i), image: image(nodeName(i), own["node"]),
 			secrets: map[string]string{"/root/.ssh/authorized_keys": authorized},
 			// A node is up once systemd started sshd and the default route.
 			opts: []testcontainers.ContainerCustomizer{
@@ -139,6 +167,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, er
 					h.Privileged = true
 					h.CgroupnsMode = moby.CgroupnsModePrivate
 					h.Tmpfs = map[string]string{"/run": "", "/run/lock": "", "/tmp": ""}
+					h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeVolume, Target: containerdDir})
 				}),
 				// systemctl is-active of two units holds when either is.
 				testcontainers.WithWaitStrategy(wait.ForExec([]string{"sh", "-c", "systemctl is-active sshd && systemctl is-active default-route"}).
@@ -151,11 +180,22 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, er
 		l.nodes = append(l.nodes, node)
 	}
 	l.controller, err = l.run(ctx, labContainer{
-		name: "controller", ip: controllerIP, image: own["controller"],
+		name: "controller", ip: controllerIP, image: own["controller"], dockerDNS: true,
 		files:   map[string]string{"/etc/ansible/hosts": inventory()},
 		secrets: map[string]string{"/root/.ssh/id_ed25519": key},
-		// The nodes are new on every run.
-		opts: []testcontainers.ContainerCustomizer{testcontainers.WithEnv(map[string]string{"ANSIBLE_HOST_KEY_CHECKING": "False"})},
+		opts: []testcontainers.ContainerCustomizer{
+			// To the internet, for the downloads of the playbooks.
+			tcnetwork.WithBridgeNetwork(),
+			testcontainers.WithFiles(
+				testcontainers.ContainerFile{HostFilePath: "../ansible", ContainerFilePath: deployDir + "/ansible", FileMode: 0o755},
+				testcontainers.ContainerFile{HostFilePath: versionsFile, ContainerFilePath: deployDir + "/versions/versions.yaml", FileMode: 0o644},
+			),
+			// The nodes are new on every run.
+			testcontainers.WithEnv(map[string]string{
+				"ANSIBLE_HOST_KEY_CHECKING": "False",
+				"ANSIBLE_CONFIG":            deployDir + "/ansible/ansible.cfg",
+			}),
+		},
 	})
 	return l, err
 }
@@ -178,9 +218,9 @@ func sshKey() (private, authorized string, _ error) {
 	return string(pem.EncodeToMemory(block)), string(ssh.MarshalAuthorizedKey(sshPub)), nil
 }
 
-// runACME starts the company CA and sets it up.
-func (l *lab) runACME(ctx context.Context, root *ca, image string) error {
-	cert, key, err := root.serverCert(acmeName)
+// runACME starts the company CA and sets it up, or unseals the cache's.
+func (l *lab) runACME(ctx context.Context, image string, from *cache) error {
+	cert, key, err := l.root.serverCert(acmeName)
 	if err != nil {
 		return err
 	}
@@ -191,45 +231,55 @@ func (l *lab) runACME(ctx context.Context, root *ca, image string) error {
 	if err != nil {
 		return err
 	}
-	_, err = setUpACME(ctx, root)
-	return err
+	if from == nil {
+		l.bao, err = setUpACME(ctx, l.root)
+		return err
+	}
+	l.bao = &openbao{http: &http.Client{Timeout: 2 * time.Minute}, token: from.token, unseal: from.unseal}
+	return l.bao.unsealed(ctx)
 }
 
-// runStore starts the store, sets it up and makes the registry's bucket.
-// Its data is on volumes, not in the container's own layer.
-func (l *lab) runStore(ctx context.Context, root *ca) error {
-	cert, key, err := root.serverCert(s3Name)
+// runStore starts the store, then sets it up and makes the registry's
+// bucket, or, restored, waits until it answers. Its data is in the
+// container's own layer, so that docker commit keeps it.
+func (l *lab) runStore(ctx context.Context, image string, restored bool) error {
+	cert, key, err := l.root.serverCert(s3Name)
 	if err != nil {
 		return err
 	}
 	_, err = l.run(ctx, labContainer{
-		name: "s3", ip: s3IP, image: s3Image,
+		name: "s3", ip: s3IP, image: image,
 		files: map[string]string{"/tls/tls.crt": string(cert), "/tls/tls.key": string(key)},
 		opts: []testcontainers.ContainerCustomizer{
 			testcontainers.WithEntrypoint("/usr/local/bin/versitygw"),
 			testcontainers.WithCmd(s3Args...),
-			testcontainers.WithHostConfigModifier(func(h *moby.HostConfig) {
-				for _, dir := range []string{"/data", "/iam", "/versions"} {
-					h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeVolume, Target: dir})
-				}
-			}),
 		},
 	})
 	if err != nil {
 		return err
 	}
-	if err := setUpStore(ctx, root); err != nil {
+	rootKeys := newS3(l.root, s3RootAccess, s3RootSecret)
+	if restored {
+		err := poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
+			return rootKeys.want(ctx, http.MethodGet, "/", "", 200)
+		})
+		if err != nil {
+			return fmt.Errorf("the store answering: %w", err)
+		}
+		return nil
+	}
+	if err := setUpStore(ctx, l.root); err != nil {
 		return err
 	}
-	return newS3(root, s3RootAccess, s3RootSecret).want(ctx, http.MethodPut, "/"+registryBucket, "", 200)
+	return rootKeys.want(ctx, http.MethodPut, "/"+registryBucket, "", 200)
 }
 
 // runRegistry starts the writable registry on the registry bucket, with
 // the registry image of the versions file, and waits until it answers.
-func (l *lab) runRegistry(ctx context.Context, root *ca, image string) error {
+func (l *lab) runRegistry(ctx context.Context, image string) error {
 	_, err := l.run(ctx, labContainer{
 		name: "registry", ip: registryIP, image: image,
-		files: map[string]string{"/etc/distribution/config.yml": registryConfig, "/etc/distribution/ca.crt": string(root.certPEM)},
+		files: map[string]string{"/etc/distribution/config.yml": registryConfig, "/etc/distribution/ca.crt": string(l.root.certPEM)},
 		opts:  []testcontainers.ContainerCustomizer{testcontainers.WithEnv(map[string]string{"SSL_CERT_FILE": "/etc/distribution/ca.crt"})},
 	})
 	if err != nil {
@@ -251,20 +301,20 @@ func (l *lab) runRegistry(ctx context.Context, root *ca, image string) error {
 
 // runMonitoring starts the OTel service, Prometheus, Alertmanager and
 // Grafana, and waits until each answers.
-func (l *lab) runMonitoring(ctx context.Context, root *ca, own map[string]string) error {
-	cert, key, err := root.serverCert(otelName)
+func (l *lab) runMonitoring(ctx context.Context, own map[string]string) error {
+	cert, key, err := l.root.serverCert(otelName)
 	if err != nil {
 		return err
 	}
 	containers := []labContainer{
 		{
 			name: "otel", ip: otelIP, image: own["otel"],
-			files: map[string]string{"/tls/tls.crt": string(cert), "/tls/tls.key": string(key), "/tls/ca.crt": string(root.certPEM)},
+			files: map[string]string{"/tls/tls.crt": string(cert), "/tls/tls.key": string(key), "/tls/ca.crt": string(l.root.certPEM)},
 		},
 		{name: "prometheus", ip: prometheusIP, image: own["prometheus"]},
 		{
 			name: "alertmanager", ip: alertmanagerIP, image: own["alertmanager"],
-			files: map[string]string{"/etc/ssl/certs/ca-certificates.crt": string(root.certPEM)},
+			files: map[string]string{"/etc/ssl/certs/ca-certificates.crt": string(l.root.certPEM)},
 		},
 		{
 			name: "grafana", ip: grafanaIP, image: own["grafana"],
@@ -287,7 +337,11 @@ type labContainer struct {
 	// services do not run as root. sshd wants its SSH files in secrets,
 	// readable by root only.
 	files, secrets map[string]string
-	opts           []testcontainers.ContainerCustomizer
+	// It keeps Docker's resolver: the DNS itself, which forwards every
+	// other name there, and the controller, which resolves the internet's
+	// names.
+	dockerDNS bool
+	opts      []testcontainers.ContainerCustomizer
 }
 
 // run starts the container. testcontainers removes it when the test ends.
@@ -303,9 +357,7 @@ func (l *lab) run(ctx context.Context, c labContainer) (*testcontainers.DockerCo
 		}),
 		testcontainers.WithConfigModifier(func(config *moby.Config) { config.Hostname = c.name }),
 	}
-	// The DNS itself keeps Docker's resolver, to which it forwards every
-	// other name.
-	if c.ip != dnsIP {
+	if !c.dockerDNS {
 		opts = append(opts, testcontainers.WithHostConfigModifier(func(h *moby.HostConfig) {
 			h.DNS = []netip.Addr{netip.MustParseAddr(dnsIP)}
 		}))
@@ -323,6 +375,7 @@ func (l *lab) run(ctx context.Context, c labContainer) (*testcontainers.DockerCo
 	ctr, err := testcontainers.Run(ctx, c.image, append(opts, c.opts...)...)
 	testcontainers.CleanupContainer(l.t, ctr)
 	if ctr != nil {
+		l.containers[c.name] = ctr
 		// Cleanups run last first, so this one runs before the container
 		// goes.
 		l.t.Cleanup(func() {
@@ -337,10 +390,24 @@ func (l *lab) run(ctx context.Context, c labContainer) (*testcontainers.DockerCo
 	return ctr, nil
 }
 
+// playbook runs ansible-playbook with args on the controller, from the
+// checkout's ansible/, and returns its output.
+func (l *lab) playbook(ctx context.Context, args ...string) (string, error) {
+	cmd := append([]string{"ansible-playbook"}, args...)
+	code, out, err := execIn(ctx, l.controller, cmd, tcexec.WithWorkingDir(deployDir+"/ansible"))
+	if err != nil {
+		return out, err
+	}
+	if code != 0 {
+		return out, fmt.Errorf("%s: exit code %d\n%s", strings.Join(cmd, " "), code, out)
+	}
+	return out, nil
+}
+
 // execIn runs a command in a container and returns its exit code and its
 // output, stdout and stderr together.
-func execIn(ctx context.Context, c *testcontainers.DockerContainer, cmd ...string) (int, string, error) {
-	code, reader, err := c.Exec(ctx, cmd, tcexec.Multiplexed())
+func execIn(ctx context.Context, c *testcontainers.DockerContainer, cmd []string, opts ...tcexec.ProcessOption) (int, string, error) {
+	code, reader, err := c.Exec(ctx, cmd, append(opts, tcexec.Multiplexed())...)
 	if err != nil {
 		return 0, "", fmt.Errorf("%s: %w", strings.Join(cmd, " "), err)
 	}

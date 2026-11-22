@@ -67,6 +67,8 @@ func startDNS(ctx context.Context) error {
 type openbao struct {
 	http  *http.Client
 	token string
+	// The key that unseals it after a restart.
+	unseal string
 }
 
 // startACME starts the company CA with the OpenBao config of images/acme,
@@ -115,15 +117,9 @@ func setUpACME(ctx context.Context, root *ca) (*openbao, error) {
 	if len(init.Keys) != 1 {
 		return nil, fmt.Errorf("OpenBao init gave %d keys", len(init.Keys))
 	}
-	bao.token = init.Token
-	if err := bao.call(ctx, http.MethodPut, "sys/unseal", map[string]any{"key": init.Keys[0]}, nil); err != nil {
+	bao.token, bao.unseal = init.Token, init.Keys[0]
+	if err := bao.unsealed(ctx); err != nil {
 		return nil, err
-	}
-	err = poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
-		return bao.call(ctx, http.MethodGet, "sys/health", nil, nil)
-	})
-	if err != nil {
-		return nil, fmt.Errorf("OpenBao active: %w", err)
 	}
 	approved := []string{clientName}
 	for i := range nodeCount {
@@ -160,6 +156,23 @@ func setUpACME(ctx context.Context, root *ca) (*openbao, error) {
 		}
 	}
 	return bao, nil
+}
+
+// unsealed unseals OpenBao, once it answers, and waits until it is active.
+func (b *openbao) unsealed(ctx context.Context) error {
+	err := poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
+		return b.call(ctx, http.MethodPut, "sys/unseal", map[string]any{"key": b.unseal}, nil)
+	})
+	if err != nil {
+		return fmt.Errorf("OpenBao unseal: %w", err)
+	}
+	err = poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
+		return b.call(ctx, http.MethodGet, "sys/health", nil, nil)
+	})
+	if err != nil {
+		return fmt.Errorf("OpenBao active: %w", err)
+	}
+	return nil
 }
 
 // eab is a new EAB key, good for one ACME account.

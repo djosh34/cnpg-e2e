@@ -8,7 +8,7 @@ A three-node k3s cluster with CloudNativePG, and an e2e runner that breaks it in
 go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario switchover
 ```
 
-- **Needs** an amd64 machine with Docker that allows privileged containers, Go, the host's `fs.inotify.max_user_instances` at 1024 or more (`bash e2e/inotify.sh` raises it) and the kernel module `br_netfilter` (`sudo modprobe br_netfilter`).
+- **Needs** an amd64 machine with Go and a Docker that allows privileged containers. A run first loads the kernel module `br_netfilter` on the machine and raises its `fs.inotify.max_user_instances` to 1024, from a privileged container.
 - **Results** go to `results/`. The test passes when the scenario passed.
 - **Scenarios** are the tags in `e2e/features/`. `always.feature` runs after each one.
 
@@ -16,7 +16,29 @@ go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario switch
 
 The scenario `airgap` runs on the machine's own Docker with only Go and Docker: the services outside k3s, three empty Rocky Linux 9 nodes with systemd and sshd on a network with no route to the internet, and a controller with Ansible. It checks that no node reaches the internet, that the controller reaches every node over SSH, and fills the registry with every image of the versions file.
 
-On GitHub, the `e2e` workflow runs scenarios by hand, each in its own job, after it publishes the images of `e2e/images` that are new. The `ci` workflow runs lint and unit tests on every pull request. The `mirror` workflow copies the images and charts of the versions file from Docker Hardened Images into this repo's packages and uploads the versions file with their digests.
+The scenario `restore` starts the same machines from the cache: a clean k3s cluster that `install.yml` installed, with no charts, and the store and company CA next to it. It checks that every node turns Ready, that `upgrade.yml` changes nothing, and that the CA issues a certificate. The cache is one image per container in this repo's packages, tagged by a hash of what makes it: the node, store and CA images, the k3s and node tools of the versions file, `ansible/` and the Go code that sets the machines up. A run that finds no cache builds it on the machine. The scenario `cache` builds it when the packages do not have it, and with `-push` pushes it, which only CI does.
+
+On GitHub, the `e2e` workflow runs scenarios by hand, each in its own job, after it publishes the images of `e2e/images` that are new and the cache when it is new. The `ci` workflow runs lint and unit tests on every pull request. The `mirror` workflow copies the images and charts of the versions file from Docker Hardened Images into this repo's packages and uploads the versions file with their digests.
+
+## Install k3s with Ansible
+
+`ansible/install.yml` installs k3s on the hosts of the inventory group `nodes`, each a server with embedded etcd, one at a time. `ansible/upgrade.yml` brings a running cluster to the files of the checkout and restarts k3s only on a node whose binary or config changed. Both share the role `k3s`, which writes `config.yaml` (the settings of `ansible/k3s/config.yaml` and the node's own), `registries.yaml` and the manifests of `ansible/k3s/manifests/`, and copies the airgap files. Both then install Helm, its diff plugin and helmfile. The nodes need no internet: the controller downloads every file of the versions file and Ansible copies it.
+
+```ini
+[nodes]
+node-1.example ansible_host=192.0.2.11
+node-2.example ansible_host=192.0.2.12
+node-3.example ansible_host=192.0.2.13
+
+[nodes:vars]
+ansible_user=root
+```
+
+```bash
+cd ansible && ansible-playbook -i inventory.ini install.yml
+```
+
+`dns_server` sets the DNS server of k3s and its pods, where the nodes' own `/etc/resolv.conf` does not do.
 
 ## Fill a registry
 
@@ -34,6 +56,7 @@ go -C e2e run ./cmd/fill ../versions/versions.yaml registry.example:5000
 |---|---|
 | `helm/` | The charts, their release list and values |
 | `versions/versions.yaml` | Every version and image digest a run uses, all of them this repo's packages |
+| `ansible/` | The playbooks that install and upgrade k3s, and their roles |
 | `ansible/k3s/` | The k3s config files of every node |
 | `e2e/` | The Go runner, its client and the feature files |
 | `e2e/images/` | The images this repo builds: the nodes, the controller and the services outside k3s, with their config and the monitoring files |

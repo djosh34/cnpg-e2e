@@ -5,12 +5,19 @@
 # chart, which DHI does not have, each pinned by digest. e2e/cmd/mirror
 # copies them by the tags named here and writes the digests it copied.
 
-# The k3s release of the nodes. Before k3s starts, each node gets the airgap
-# tarball of its architecture, and k3s imports its images: those of the
-# release's k3s-images.txt.
+# The k3s release of the nodes. The playbooks of ansible/ copy its binary,
+# its install script and the airgap tarball to every node, and k3s imports
+# the tarball's images: those of the release's k3s-images.txt.
 k3s:
   version: "v1.37.2+k3s1"
   image: rancher/k3s:v1.37.2-k3s1@sha256:21ea6e0fac4e3930c2ce8aa40ddd41a8b18cb3e9a0222c030dc005e7e88c4332
+  binary:
+    amd64:
+      url: https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s
+      sha256: 265b3ee6a3198ef14033c63ef46cbb32370d83795199fb6d1b01f21575eddbda
+  install:
+    url: https://raw.githubusercontent.com/k3s-io/k3s/v1.37.2%2Bk3s1/install.sh
+    sha256: ed01f89fd977bf20ac1516bbebf8370bf3ddbaa55dac8aba610956a4c78cc00b
   airgap:
     amd64:
       url: https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s-airgap-images-amd64.tar.zst
@@ -24,6 +31,19 @@ k3s:
     - docker.io/rancher/mirrored-library-traefik:3.7.15
     - docker.io/rancher/mirrored-metrics-server:v0.9.0
     - docker.io/rancher/mirrored-pause:3.10.2
+
+# What the playbooks install on every node for the reconcile, each a release
+# archive: Helm, its diff plugin and helmfile.
+nodeTools:
+  helm:
+    url: https://get.helm.sh/helm-v4.3.2-linux-amd64.tar.gz
+    sha256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
+  helm-diff:
+    url: https://github.com/databus23/helm-diff/releases/download/v3.15.15/helm-diff-linux-amd64.tgz
+    sha256: 504e99410611daa70702362e1b10dc74929df8a912cb3f6b5d21d1ee9d0cb7d9
+  helmfile:
+    url: https://github.com/helmfile/helmfile/releases/download/v1.8.4/helmfile_1.8.4_linux_amd64.tar.gz
+    sha256: 1f19ced8adb0cdf2350e94ca598cf64e390d8c21d0d9b4bdc1c9f246d4591c9d
 
 # The tools of the e2e image that have to match the cluster: kubectl of the
 # k3s release's Kubernetes version, kubectl-cnpg of the operator's version,

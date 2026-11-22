@@ -1,0 +1,47 @@
+# Downloads to the controller every file that the playbooks copy to the
+# nodes, from the URLs of the versions file, each checked by its sha256,
+# and unpacks the archives. The nodes have no internet; the controller does.
+# A file that is already there with its sha256 is not downloaded again.
+- name: Download the files of the nodes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    downloads: "{{ playbook_dir }}/downloads"
+  tasks:
+    - name: Read the versions file
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../versions/versions.yaml"
+        name: versions
+
+    - name: Make the directories
+      ansible.builtin.file:
+        path: "{{ downloads }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: ["", helm, helm-diff, helmfile]
+
+    - name: Download
+      ansible.builtin.get_url:
+        url: "{{ item.value.url }}"
+        dest: "{{ downloads }}/{{ item.key }}"
+        checksum: "sha256:{{ item.value.sha256 }}"
+        mode: "0644"
+      loop: "{{ files | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      vars:
+        files:
+          k3s: "{{ versions.k3s.binary.amd64 }}"
+          k3s-install.sh: "{{ versions.k3s.install }}"
+          k3s-airgap-images-amd64.tar.zst: "{{ versions.k3s.airgap.amd64 }}"
+          helm.tar.gz: "{{ versions.nodeTools.helm }}"
+          helm-diff.tgz: "{{ versions.nodeTools['helm-diff'] }}"
+          helmfile.tar.gz: "{{ versions.nodeTools.helmfile }}"
+
+    - name: Unpack Helm, its diff plugin and helmfile
+      ansible.builtin.unarchive:
+        src: "{{ downloads }}/{{ item }}.{{ 'tgz' if item == 'helm-diff' else 'tar.gz' }}"
+        dest: "{{ downloads }}/{{ item }}"
+        remote_src: true
+      loop: [helm, helm-diff, helmfile]
