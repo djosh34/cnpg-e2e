@@ -103,22 +103,23 @@ type lab struct {
 // and the store and the CA get new TLS certificates.
 func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cache) (*lab, error) {
 	l := &lab{t: t, containers: map[string]*testcontainers.DockerContainer{}}
-	own := map[string]string{}
-	names, err := images.Names()
-	if err != nil {
-		return nil, err
+	// The image of each container: the cache's where it holds the
+	// container, else this repo's image of its kind.
+	kinds := map[string]string{}
+	for _, name := range []string{"dns", "acme", "s3", "otel", "prometheus", "alertmanager", "grafana", "controller"} {
+		kinds[name] = name
 	}
-	for _, name := range names {
-		if own[name], err = images.Get(ctx, name); err != nil {
+	for i := range nodeCount {
+		kinds[nodeName(i)] = "node"
+	}
+	image := map[string]string{}
+	var err error
+	for name, kind := range kinds {
+		if from != nil && from.images[name] != "" {
+			image[name] = from.images[name]
+		} else if image[name], err = images.Get(ctx, kind); err != nil {
 			return nil, err
 		}
-	}
-	// The image of each container the cache holds.
-	image := func(name, fresh string) string {
-		if from == nil {
-			return fresh
-		}
-		return from.images[name]
 	}
 	if from == nil {
 		if l.root, err = newCA(); err != nil {
@@ -137,21 +138,21 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 	l.network = n
 
 	logf("starting the DNS, the company CA, the store and the registry")
-	_, err = l.run(ctx, labContainer{name: "dns", ip: dnsIP, image: own["dns"], dockerDNS: true, files: map[string]string{"/etc/coredns/hosts": hosts()}})
+	_, err = l.run(ctx, labContainer{name: "dns", ip: dnsIP, image: image["dns"], dockerDNS: true, files: map[string]string{"/etc/coredns/hosts": hosts()}})
 	if err != nil {
 		return nil, err
 	}
-	if err := l.runACME(ctx, image("acme", own["acme"]), from); err != nil {
+	if err := l.runACME(ctx, image["acme"], from); err != nil {
 		return nil, err
 	}
-	if err := l.runStore(ctx, image("s3", own["s3"]), from != nil); err != nil {
+	if err := l.runStore(ctx, image["s3"], from != nil); err != nil {
 		return nil, err
 	}
 	if err := l.runRegistry(ctx, m.Registry.Image); err != nil {
 		return nil, err
 	}
 	logf("starting the monitoring")
-	if err := l.runMonitoring(ctx, own); err != nil {
+	if err := l.runMonitoring(ctx, image); err != nil {
 		return nil, err
 	}
 	logf("starting the nodes and the controller")
@@ -161,7 +162,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 	}
 	for i := range nodeCount {
 		node, err := l.run(ctx, labContainer{
-			name: nodeName(i), ip: nodeIP(i), image: image(nodeName(i), own["node"]),
+			name: nodeName(i), ip: nodeIP(i), image: image[nodeName(i)],
 			secrets: map[string]string{"/root/.ssh/authorized_keys": authorized},
 			// A node is up once systemd started sshd and the default route.
 			opts: []testcontainers.ContainerCustomizer{
@@ -182,7 +183,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 		l.nodes = append(l.nodes, node)
 	}
 	l.controller, err = l.run(ctx, labContainer{
-		name: "controller", ip: controllerIP, image: own["controller"], dockerDNS: true,
+		name: "controller", ip: controllerIP, image: image["controller"], dockerDNS: true,
 		files:   map[string]string{"/etc/ansible/hosts": inventory()},
 		secrets: map[string]string{"/root/.ssh/id_ed25519": key},
 		opts: []testcontainers.ContainerCustomizer{
@@ -303,23 +304,23 @@ func (l *lab) runRegistry(ctx context.Context, image string) error {
 
 // runMonitoring starts the OTel service, Prometheus, Alertmanager and
 // Grafana, and waits until each answers.
-func (l *lab) runMonitoring(ctx context.Context, own map[string]string) error {
+func (l *lab) runMonitoring(ctx context.Context, image map[string]string) error {
 	cert, key, err := l.root.serverCert(otelName)
 	if err != nil {
 		return err
 	}
 	containers := []labContainer{
 		{
-			name: "otel", ip: otelIP, image: own["otel"],
+			name: "otel", ip: otelIP, image: image["otel"],
 			files: map[string]string{"/tls/tls.crt": string(cert), "/tls/tls.key": string(key), "/tls/ca.crt": string(l.root.certPEM)},
 		},
-		{name: "prometheus", ip: prometheusIP, image: own["prometheus"]},
+		{name: "prometheus", ip: prometheusIP, image: image["prometheus"]},
 		{
-			name: "alertmanager", ip: alertmanagerIP, image: own["alertmanager"],
+			name: "alertmanager", ip: alertmanagerIP, image: image["alertmanager"],
 			files: map[string]string{"/etc/ssl/certs/ca-certificates.crt": string(l.root.certPEM)},
 		},
 		{
-			name: "grafana", ip: grafanaIP, image: own["grafana"],
+			name: "grafana", ip: grafanaIP, image: image["grafana"],
 			opts: []testcontainers.ContainerCustomizer{testcontainers.WithEnv(map[string]string{"GF_SECURITY_ADMIN_PASSWORD": grafanaPassword})},
 		},
 	}

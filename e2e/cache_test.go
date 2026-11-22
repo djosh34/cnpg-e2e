@@ -34,6 +34,7 @@ import (
 	"github.com/go-acme/lego/v4/challenge/http01"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
+	"github.com/regclient/regclient/types/errs"
 	"github.com/regclient/regclient/types/ref"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -55,7 +56,9 @@ import (
 //
 // The scenario restore starts the lab from the cache, pulled or built here,
 // and checks that the cluster is Ready, that upgrade.yml changes nothing on
-// a restored node, and that the CA issues a certificate.
+// a restored node, and that the CA issues a certificate. With -no-build it
+// fails where it would build the cache, as in CI, where the cache job
+// published it before.
 const (
 	cacheScenario   = "cache"
 	restoreScenario = "restore"
@@ -63,7 +66,10 @@ const (
 	restoreLabel = "cnpg-e2e.restore"
 )
 
-var pushFlag = flag.Bool("push", false, "with -scenario cache: push a cache it builds to this repo's packages, which only CI does")
+var (
+	pushFlag    = flag.Bool("push", false, "with -scenario cache: push a cache it builds to this repo's packages, which only CI does")
+	noBuildFlag = flag.Bool("no-build", false, "with -scenario restore: fail when the cache cannot be pulled, instead of building it")
+)
 
 // cache is a cache to start the lab from: the image of each container it
 // holds, and what the CA's image holds besides its data.
@@ -98,9 +104,11 @@ func cacheRef(name, tag string) string {
 }
 
 // cacheInputs are the files besides images/ and the versions file that make
-// what the cache holds: the playbooks and the Go code that starts the lab
-// and sets up the store and the CA.
-var cacheInputs = []string{"../ansible", "lab_test.go", "cache_test.go", "outside.go", "store.go", "ca.go"}
+// what the cache holds: the playbooks, and the Go code that starts the lab,
+// names its machines and addresses, and sets up the store and the CA.
+var cacheInputs = []string{
+	"../ansible", "lab_test.go", "cache_test.go", "outside.go", "store.go", "ca.go", "nodes.go", "docker.go", "client.go",
+}
 
 // cacheTag is the tag of the cache of this checkout: a hash of the images of
 // the nodes, the store and the CA, of the versions file's k3s and nodeTools,
@@ -177,9 +185,13 @@ func testCache(ctx context.Context, t *testing.T, m *versions.Manifest) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := rc.ManifestHead(ctx, r); err != nil {
-			logf("the packages have no %s: %v", r.CommonName(), err)
+		_, err = rc.ManifestHead(ctx, r)
+		switch {
+		case errors.Is(err, errs.ErrNotFound):
+			logf("the packages have no %s", r.CommonName())
 			missing = true
+		case err != nil:
+			t.Fatal(err)
 		}
 	}
 	if !missing {
@@ -205,6 +217,9 @@ func testCache(ctx context.Context, t *testing.T, m *versions.Manifest) {
 // containers are gone when it returns.
 func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag string) {
 	built := t.Run("build the cache", func(t *testing.T) {
+		if err := prepareHost(ctx); err != nil {
+			t.Fatal(err)
+		}
 		l, err := startLab(ctx, t, m, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -291,6 +306,9 @@ func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := prepareHost(ctx); err != nil {
+		t.Fatal(err)
+	}
 	start := time.Now()
 	l, err := startLab(ctx, t, m, from)
 	if err != nil {
@@ -344,6 +362,9 @@ func getCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag strin
 			missing = err
 			break
 		}
+	}
+	if missing != nil && *noBuildFlag {
+		return nil, fmt.Errorf("pulling the cache %s: %w", tag, missing)
 	}
 	if missing != nil {
 		logf("building the cache %s here, since pulling it failed: %v", tag, missing)

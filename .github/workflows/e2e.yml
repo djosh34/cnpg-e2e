@@ -70,9 +70,14 @@ jobs:
           docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
           go -C e2e run ./cmd/images
 
+  # One cache publisher at a time, across branches: a second one waits,
+  # then finds the cache the first pushed under the same tag.
   cache:
     name: Publish the cache
     needs: images
+    concurrency:
+      group: e2e-cache
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -113,7 +118,8 @@ jobs:
       - name: Scenario
         env:
           SCENARIO: ${{ matrix.scenario }}
-        run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO"
+        # The cache job published the cache, so restore pulls it.
+        run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO" -no-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:

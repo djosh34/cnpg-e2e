@@ -29,8 +29,8 @@ import (
 //go:embed acme alertmanager controller dns grafana node otel prometheus s3
 var files embed.FS
 
-// Names are the names of the images, their directories.
-func Names() ([]string, error) {
+// names are the names of the images, their directories.
+func names() ([]string, error) {
 	entries, err := fs.ReadDir(files, ".")
 	if err != nil {
 		return nil, err
@@ -94,11 +94,11 @@ func Get(ctx context.Context, name string) (string, error) {
 // tag yet. It needs docker login to ghcr.io with the right to push this
 // repo's packages: only this repo's workflows push them.
 func Publish(ctx context.Context, rc *regclient.RegClient) error {
-	names, err := Names()
+	all, err := names()
 	if err != nil {
 		return err
 	}
-	for _, name := range names {
+	for _, name := range all {
 		image, err := Ref(name)
 		if err != nil {
 			return err

@@ -34,17 +34,14 @@ var scenarioFlag = flag.String("scenario", "", "the scenario to run: its tag, wi
 // run's files out to results/. testcontainers removes the container and its
 // volumes when the test ends, and Ryuk does when the test is killed. Without
 // -scenario it skips, so go test ./... starts no container. The scenarios of
-// labScenarios run on the machine's own Docker instead. Every scenario first
-// readies the machine's kernel for the nodes (prepareHost).
+// labScenarios run on the machine's own Docker instead. A scenario readies
+// the machine's kernel (prepareHost) before it starts k3s.
 func TestScenario(t *testing.T) {
 	if *scenarioFlag == "" {
 		t.Skip("no -scenario")
 	}
 	m, err := versions.Load(versionsFile)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := prepareHost(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if scenario, ok := labScenarios[*scenarioFlag]; ok {
@@ -56,6 +53,9 @@ func TestScenario(t *testing.T) {
 		t.Cleanup(cancel)
 		scenario(ctx, t, m)
 		return
+	}
+	if err := prepareHost(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	t.Logf("the versions file %s: k3s %s", versionsFile, m.K3s.Version)
 	// testcontainers puts a directory under the parent of ContainerFilePath
@@ -126,8 +126,10 @@ var labScenarios = map[string]func(context.Context, *testing.T, *versions.Manife
 // themselves, and raises fs.inotify.max_user_instances to 1024: the limit
 // is the machine's, for every container alike, many machines have 128, and
 // each node takes many.
-const hostSetup = `modprobe br_netfilter
-if [ "$(sysctl -n fs.inotify.max_user_instances)" -lt 1024 ]; then
+const hostSetup = `set -eu
+modprobe br_netfilter
+have=$(sysctl -n fs.inotify.max_user_instances)
+if [ "$have" -lt 1024 ]; then
   sysctl -w fs.inotify.max_user_instances=1024
 fi`
 
