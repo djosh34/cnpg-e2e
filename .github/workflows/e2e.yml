@@ -12,6 +12,10 @@ on:
         description: Scenario tags, separated by commas; empty for every scenario
         type: string
         default: ""
+  # For now: a push run, with every job skipped, lets GitHub start this
+  # workflow by hand before it is on main.
+  push:
+    branches: [work/46-import-run-ci]
 
 run-name: e2e${{ inputs.scenarios && format(' of {0}', inputs.scenarios) || '' }}
 
@@ -21,6 +25,7 @@ permissions:
 jobs:
   plan:
     name: Pick the scenarios
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     outputs:
       scenarios: ${{ steps.pick.outputs.scenarios }}
