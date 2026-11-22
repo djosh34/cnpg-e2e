@@ -61,9 +61,11 @@ func TestScenario(t *testing.T) {
 		t.Fatal("a run needs go test's -timeout")
 	}
 	// The image build and the scenario share one budget, which leaves 5 min
-	// before go test's -timeout for the copy-out of the results.
+	// before go test's -timeout for the copy-out of the results. Cleanups run
+	// last first, so ctx ends after the container's cleanups, and the log
+	// consumer reads to the end.
 	ctx, cancel := context.WithDeadline(context.Background(), deadline.Add(-5*time.Minute))
-	defer cancel()
+	t.Cleanup(cancel)
 	c, err := testcontainers.Run(ctx, "",
 		testcontainers.WithDockerfile(testcontainers.FromDockerfile{
 			Context: "..", Dockerfile: "e2e/Dockerfile", BuildLogWriter: os.Stdout, BuildArgs: toolArgs(m.Tools),
@@ -85,7 +87,10 @@ func TestScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := c.State(ctx)
+	// ctx can have ended just after the container exited.
+	inspect, cancelInspect := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelInspect()
+	state, err := c.State(inspect)
 	if err != nil {
 		t.Fatal(err)
 	}
