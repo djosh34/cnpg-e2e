@@ -353,14 +353,20 @@ func getCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag strin
 	for _, name := range cachedNames() {
 		c.images[name] = cacheRef(name, tag)
 	}
-	var missing error
+	// One cluster's images, all from here or all from the packages: a cache
+	// built here and one CI pushed have the same tag but different clusters.
+	local := true
 	for _, image := range c.images {
-		if _, err := command(ctx, "docker", "image", "inspect", image); err == nil {
-			continue
+		if _, err := command(ctx, "docker", "image", "inspect", image); err != nil {
+			local = false
 		}
-		if _, err := command(ctx, "docker", "pull", "--quiet", image); err != nil {
-			missing = err
-			break
+	}
+	var missing error
+	if !local {
+		for _, image := range c.images {
+			if _, missing = command(ctx, "docker", "pull", "--quiet", image); missing != nil {
+				break
+			}
 		}
 	}
 	if missing != nil && *noBuildFlag {

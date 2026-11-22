@@ -8,8 +8,8 @@ name: e2e
 # restore starts a clean k3s cluster from the cache. Each job uploads the
 # run's files, also when its scenario failed. First, the images job
 # publishes the images of e2e/images that the packages do not have yet, and
-# then the cache job builds and publishes the cache when the packages do not
-# have it.
+# when restore runs, the cache job builds and publishes the cache when the
+# packages do not have it.
 on:
   workflow_dispatch:
     inputs:
@@ -74,7 +74,8 @@ jobs:
   # then finds the cache the first pushed under the same tag.
   cache:
     name: Publish the cache
-    needs: images
+    needs: [plan, images]
+    if: contains(fromJSON(needs.plan.outputs.scenarios), 'restore')
     concurrency:
       group: e2e-cache
       cancel-in-progress: false
@@ -98,9 +99,12 @@ jobs:
       - name: Build and push the cache when it is missing
         run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 50m -v . -scenario cache -push
 
+  # Only restore reads the cache. It fails on its own when the cache job
+  # failed, since it then cannot pull the cache; the other scenarios run.
   scenario:
     name: ${{ matrix.scenario }}
     needs: [plan, images, cache]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.images.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
