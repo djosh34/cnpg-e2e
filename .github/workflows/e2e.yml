@@ -3,8 +3,11 @@ name: e2e
 # Runs scenarios of e2e/features by hand, each in its own job, in parallel:
 # a new three-node k3s cluster with the charts of helm/ and the versions of
 # versions/versions.yaml, one scenario, then always.feature. scenarios picks
-# some by their tags; empty runs every scenario. Each job uploads the run's
-# files, also when its scenario failed.
+# some by their tags; empty runs every scenario. The scenario airgap checks
+# the nodes, the controller and the fill on the runner's own Docker. Each
+# job uploads the run's files, also when its scenario failed. First, the
+# images job publishes the images of e2e/images that the packages do not
+# have yet.
 on:
   workflow_dispatch:
     inputs:
@@ -42,9 +45,31 @@ jobs:
           echo "Scenarios: $scenarios"
           echo "scenarios=$scenarios" >>"$GITHUB_OUTPUT"
 
+  images:
+    name: Publish the images
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: e2e/go.mod
+          cache-dependency-path: e2e/go.sum
+      - name: Build and push the missing images
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
+          go -C e2e run ./cmd/images
+
   scenario:
     name: ${{ matrix.scenario }}
-    needs: plan
+    needs: [plan, images]
     strategy:
       fail-fast: false
       matrix:

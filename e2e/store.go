@@ -60,8 +60,7 @@ var s3Policy = `{"Version": "2012-10-17", "Statement": [
 
 const versioningOn = `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status></VersioningConfiguration>`
 
-// startStore starts the store, makes CNPG's user and the bucket, and checks
-// that CNPG's keys can write but not delete or change the bucket.
+// startStore starts the store and sets it up.
 func startStore(ctx context.Context, root *ca) error {
 	cert, key, err := root.serverCert(s3Name)
 	if err != nil {
@@ -70,17 +69,26 @@ func startStore(ctx context.Context, root *ca) error {
 	err = container{
 		name: "s3", ip: s3IP, image: s3Image,
 		opts: []string{"--entrypoint", "/usr/local/bin/versitygw"},
-		args: []string{"--access", s3RootAccess, "--secret", s3RootSecret, "--port", ":443",
-			"--cert", "/tls/tls.crt", "--key", "/tls/tls.key", "--admin-port", strings.TrimPrefix(s3Admin, "http://"),
-			"--iam-dir", "/iam", "posix", "--versioning-dir", "/versions", "/data"},
+		args:  s3Args,
 		files: map[string]string{"/tls/tls.crt": string(cert), "/tls/tls.key": string(key)},
 		dirs:  []string{"/data", "/iam", "/versions"},
 	}.run(ctx)
 	if err != nil {
 		return err
 	}
+	return setUpStore(ctx, root)
+}
+
+// s3Args are the arguments of versitygw.
+var s3Args = []string{"--access", s3RootAccess, "--secret", s3RootSecret, "--port", ":443",
+	"--cert", "/tls/tls.crt", "--key", "/tls/tls.key", "--admin-port", strings.TrimPrefix(s3Admin, "http://"),
+	"--iam-dir", "/iam", "posix", "--versioning-dir", "/versions", "/data"}
+
+// setUpStore makes CNPG's user and the bucket, once the store answers, and
+// checks that CNPG's keys can write but not delete or change the bucket.
+func setUpStore(ctx context.Context, root *ca) error {
 	rootKeys, cnpg := newS3(root, s3RootAccess, s3RootSecret), newS3(root, s3Access, s3Secret)
-	err = poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
+	err := poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
 		return rootKeys.want(ctx, http.MethodGet, "/", "", 200)
 	})
 	if err != nil {

@@ -1,0 +1,11 @@
+[Unit]
+Description=Default route through the network's gateway
+Before=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/default-route
+
+[Install]
+WantedBy=multi-user.target

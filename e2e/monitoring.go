@@ -11,19 +11,20 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/djosh34/cnpg-e2e/e2e/images"
 )
 
-// The monitoring outside k3s, as containers next to the nodes: the upstream
-// OTel service with the one URL the collectors in k3s send to, Prometheus
-// as the rule evaluator with monitoring/rules.yaml, Alertmanager with
-// monitoring/alertmanager.yaml, and Grafana with monitoring/dashboard.json.
-// The e2e test itself plays the receiver of alertmanager.yaml.
+// The monitoring outside k3s, as containers next to the nodes, with the
+// files of their images in images/: the upstream OTel service with the one
+// URL the collectors in k3s send to, Prometheus as the rule evaluator,
+// Alertmanager and Grafana with its dashboard. The e2e test itself plays
+// the receiver of images/alertmanager/alertmanager.yaml.
 const (
 	otelIP         = "10.77.0.50"
 	prometheusIP   = "10.77.0.51"
@@ -42,98 +43,38 @@ const (
 	alertmanagerImage = "prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a"
 	grafanaImage      = "grafana/grafana:12.4.12@sha256:83be3e511ede559bee80e2215bb1987cb1246075461cb961beb515b0341e7aea"
 
-	// Grafana's data source, which the dashboard's data source variable picks.
+	// Grafana's data source in images/grafana/datasources.yaml, which the
+	// dashboard's data source variable picks.
 	grafanaSource   = "prometheus"
 	grafanaPassword = "example-password"
 	// Grafana's API, as its admin: Go sends the user in the URL as basic auth.
 	grafanaURL = "http://admin:" + grafanaPassword + "@" + grafanaIP + ":3000"
 )
 
-// The upstream OTel service: OTLP over gRPC with mTLS, the client
-// certificate from the company CA, handed to Prometheus by remote write
-// with every metric name as the scrape gave it.
-const upstreamConfig = `extensions:
-  health_check:
-    endpoint: 0.0.0.0:13133
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
-        tls:
-          cert_file: /tls/tls.crt
-          key_file: /tls/tls.key
-          client_ca_file: /tls/ca.crt
-exporters:
-  prometheus_remote_write:
-    endpoint: http://` + prometheusName + `:9090/api/v1/write
-    translation_strategy: UnderscoreEscapingWithoutSuffixes
-    tls:
-      insecure: true
-    # One sender, so the samples of a series arrive in order.
-    remote_write_queue:
-      num_consumers: 1
-service:
-  extensions: [health_check]
-  pipelines:
-    metrics:
-      receivers: [otlp]
-      exporters: [prometheus_remote_write]
-`
-
-const prometheusConfig = `global:
-  evaluation_interval: 15s
-rule_files: [/etc/prometheus/rules.yaml]
-alerting:
-  alertmanagers:
-    - static_configs: [{targets: ["` + alertmanagerName + `:9093"]}]
-`
-
-const grafanaSources = `apiVersion: 1
-datasources:
-  - name: Prometheus
-    uid: ` + grafanaSource + `
-    type: prometheus
-    url: http://` + prometheusName + `:9090
-    isDefault: true
-`
-
-const grafanaDashboards = `apiVersion: 1
-providers:
-  - name: e2e
-    type: file
-    options:
-      path: /etc/grafana/dashboards
-`
-
 // startMonitoring starts the receiver and the four containers, and returns
 // once each answers.
 func startMonitoring(ctx context.Context, root *ca) (*monitoring, error) {
-	read := func(name string) (string, error) {
-		data, err := os.ReadFile(filepath.Join(monitoringDir, name))
-		return string(data), err
+	file := map[string]string{}
+	for _, path := range []string{
+		"otel/config.yaml", "prometheus/prometheus.yml", "prometheus/rules.yaml", "alertmanager/alertmanager.yaml",
+		"grafana/datasources.yaml", "grafana/dashboards.yaml", "grafana/dashboard.json",
+	} {
+		content, err := images.Read(path)
+		if err != nil {
+			return nil, err
+		}
+		file[path] = content
 	}
-	rules, err := read("rules.yaml")
-	if err != nil {
-		return nil, err
-	}
-	routes, err := read("alertmanager.yaml")
-	if err != nil {
-		return nil, err
-	}
-	dashboard, err := read("dashboard.json")
-	if err != nil {
-		return nil, err
-	}
+	dashboard := file["grafana/dashboard.json"]
 	m := &monitoring{http: &http.Client{Timeout: 20 * time.Second}}
 	var uid struct {
 		UID string `json:"uid"`
 	}
 	if err := json.Unmarshal([]byte(dashboard), &uid); err != nil {
-		return nil, fmt.Errorf("monitoring/dashboard.json: %w", err)
+		return nil, fmt.Errorf("images/grafana/dashboard.json: %w", err)
 	}
 	if uid.UID == "" {
-		return nil, errors.New("monitoring/dashboard.json has no uid")
+		return nil, errors.New("images/grafana/dashboard.json has no uid")
 	}
 	m.dashboard = uid.UID
 	if err := m.receive(root); err != nil {
@@ -147,7 +88,7 @@ func startMonitoring(ctx context.Context, root *ca) (*monitoring, error) {
 		{
 			name: "otel", ip: otelIP, image: otelImage, args: []string{"--config=/etc/otel/config.yaml"},
 			files: map[string]string{
-				"/etc/otel/config.yaml": upstreamConfig,
+				"/etc/otel/config.yaml": file["otel/config.yaml"],
 				"/tls/tls.crt":          string(cert),
 				"/tls/tls.key":          string(key),
 				"/tls/ca.crt":           string(root.certPEM),
@@ -157,7 +98,10 @@ func startMonitoring(ctx context.Context, root *ca) (*monitoring, error) {
 			name: "prometheus", ip: prometheusIP, image: prometheusImage,
 			args: []string{"--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus",
 				"--web.enable-remote-write-receiver"},
-			files: map[string]string{"/etc/prometheus/prometheus.yml": prometheusConfig, "/etc/prometheus/rules.yaml": rules},
+			files: map[string]string{
+				"/etc/prometheus/prometheus.yml": file["prometheus/prometheus.yml"],
+				"/etc/prometheus/rules.yaml":     file["prometheus/rules.yaml"],
+			},
 		},
 		// Alertmanager trusts the company CA, which signs the receiver's
 		// certificate.
@@ -166,7 +110,7 @@ func startMonitoring(ctx context.Context, root *ca) (*monitoring, error) {
 			args: []string{"--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager",
 				"--cluster.listen-address="},
 			files: map[string]string{
-				"/etc/alertmanager/alertmanager.yml": routes,
+				"/etc/alertmanager/alertmanager.yml": file["alertmanager/alertmanager.yaml"],
 				"/etc/ssl/certs/ca-certificates.crt": string(root.certPEM),
 			},
 		},
@@ -174,8 +118,8 @@ func startMonitoring(ctx context.Context, root *ca) (*monitoring, error) {
 			name: "grafana", ip: grafanaIP, image: grafanaImage,
 			opts: []string{"--env", "GF_SECURITY_ADMIN_PASSWORD=" + grafanaPassword},
 			files: map[string]string{
-				"/etc/grafana/provisioning/datasources/e2e.yaml": grafanaSources,
-				"/etc/grafana/provisioning/dashboards/e2e.yaml":  grafanaDashboards,
+				"/etc/grafana/provisioning/datasources/e2e.yaml": file["grafana/datasources.yaml"],
+				"/etc/grafana/provisioning/dashboards/e2e.yaml":  file["grafana/dashboards.yaml"],
 				"/etc/grafana/dashboards/dashboard.json":         dashboard,
 			},
 		},
@@ -185,7 +129,12 @@ func startMonitoring(ctx context.Context, root *ca) (*monitoring, error) {
 			return nil, err
 		}
 	}
-	err = poll(ctx, time.Now().Add(2*time.Minute), func(ctx context.Context) error {
+	return m, m.ready(ctx)
+}
+
+// ready waits up to 2 min for the four monitoring containers to answer.
+func (m *monitoring) ready(ctx context.Context) error {
+	err := poll(ctx, time.Now().Add(2*time.Minute), func(ctx context.Context) error {
 		return errors.Join(
 			m.get(ctx, "http://"+otelIP+":13133/", nil),
 			m.get(ctx, "http://"+prometheusIP+":9090/-/ready", nil),
@@ -194,9 +143,9 @@ func startMonitoring(ctx context.Context, root *ca) (*monitoring, error) {
 		)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("the monitoring containers: %w", err)
+		return fmt.Errorf("the monitoring containers: %w", err)
 	}
-	return m, nil
+	return nil
 }
 
 // monitoring is the e2e test's view of the monitoring: Prometheus's,

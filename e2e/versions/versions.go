@@ -15,17 +15,32 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// Packages is where this repo publishes its images and charts. The
+// versions file names only images and charts there, besides k3s's own.
+const Packages = "ghcr.io/djosh34/cnpg-e2e"
+
 // Manifest is what the e2e run reads from a manifest besides the charts'
 // own values, which only Helm reads.
 type Manifest struct {
 	K3s        K3s              `yaml:"k3s"`
 	Tools      Tools            `yaml:"tools"`
 	Charts     map[string]Chart `yaml:"charts"`
+	Registry   Registry         `yaml:"registry"`
 	PostgreSQL PostgreSQL       `yaml:"postgresql"`
 
-	// pinned are the images the manifest pins by digest, as
-	// repository@digest with the repository in its full form.
-	pinned []string
+	// images are the images the manifest pins by digest, each once.
+	images []Pin
+}
+
+// Registry is the registry of the nodes: its image by tag and digest.
+type Registry struct {
+	Image string `yaml:"image"`
+}
+
+// Pin is an image the manifest pins: its repository in its full form, its
+// tag and its digest.
+type Pin struct {
+	Repository, Tag, Digest string
 }
 
 // K3s is the k3s release of the nodes.
@@ -68,12 +83,14 @@ type Script struct {
 // for a chart whose name differs from the wrapper's dependency, such as
 // cert-manager-chart for cert-manager: Name is the chart's own, Alias the
 // key its values are under. Both are empty when the wrapper's dependency
-// already names the chart.
+// already names the chart. Digest is the digest of the chart's OCI
+// manifest.
 type Chart struct {
 	Name       string `yaml:"name"`
 	Alias      string `yaml:"alias"`
 	Repository string `yaml:"repository"`
 	Version    string `yaml:"version"`
+	Digest     string `yaml:"digest"`
 }
 
 // PostgreSQL are the instance images. The cnpg-cluster charts read
@@ -88,7 +105,8 @@ type PostgreSQL struct {
 }
 
 var (
-	sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	sha256Hex    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	sha256Digest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	// An exact chart version, not a range: Helm would pick a newer chart.
 	exactVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 )
@@ -118,8 +136,8 @@ func Parse(data []byte) (*Manifest, error) {
 	}
 	var w images
 	w.visit(all, "")
-	slices.Sort(w.pinned)
-	m.pinned = slices.Compact(w.pinned)
+	slices.SortFunc(w.pinned, func(a, b Pin) int { return strings.Compare(a.String(), b.String()) })
+	m.images = slices.Compact(w.pinned)
 	slices.Sort(w.unpinned)
 	errs := []error{m.check()}
 	for _, path := range w.unpinned {
@@ -158,8 +176,10 @@ func (m *Manifest) check() error {
 	need(len(m.Charts) > 0, "charts")
 	for name, c := range m.Charts {
 		need(c.Repository != "" && exactVersion.MatchString(c.Version), "charts."+name+" with repository and an exact version")
+		need(sha256Digest.MatchString(c.Digest), "charts."+name+".digest")
 		need((c.Name == "") == (c.Alias == ""), "charts."+name+" with both name and alias, or neither")
 	}
+	need(strings.Contains(m.Registry.Image, "@sha256:"), "registry.image with a digest")
 	need(strings.Contains(m.PostgreSQL.ImageName, "@sha256:"), "postgresql.imageName with a digest")
 	need(strings.Contains(m.PostgreSQL.RolloutFrom, "@sha256:"), "postgresql.rolloutFrom with a digest")
 	need(m.PostgreSQL.PostgresUID > 0 && m.PostgreSQL.PostgresGID > 0, "postgresql.postgresUID and postgresGID, both above 0")
@@ -171,8 +191,21 @@ func (m *Manifest) check() error {
 // docker.io/library/busybox. They are the images of every string such as
 // registry.example/name:tag@sha256:…, and of every image block of a chart's
 // values: a map with repository (after registry when there is one) and
-// either digest or a tag that ends in @sha256:….
-func (m *Manifest) Pinned() []string { return m.pinned }
+// either digest or a tag that ends in @sha256:…. k3s's node image is not
+// one of them: the nodes never pull it.
+func (m *Manifest) Pinned() []string {
+	pinned := make([]string, 0, len(m.images))
+	for _, p := range m.images {
+		pinned = append(pinned, p.Repository+"@"+p.Digest)
+	}
+	slices.Sort(pinned)
+	return slices.Compact(pinned)
+}
+
+// Images are the images of Pinned with their tags, each once.
+func (m *Manifest) Images() []Pin { return m.images }
+
+func (p Pin) String() string { return p.Repository + ":" + p.Tag + "@" + p.Digest }
 
 // chartImage is an image block of an upstream chart: its keys in the
 // manifest, and the field the chart reads its digest from: digest, or tag
@@ -229,16 +262,17 @@ func (c chartImage) pinnedIn(manifest any) bool {
 // images walks the manifest for its images: those it pins, the paths of
 // the image blocks without a digest, and of those with a digest both in
 // digest and in tag, of which a chart reads only one. charts holds chart
-// repositories, not images.
+// repositories, not images, and k3s the node image, which no node pulls.
 type images struct {
-	pinned, unpinned, twoDigests []string
+	pinned               []Pin
+	unpinned, twoDigests []string
 }
 
 func (w *images) visit(node any, path string) {
 	switch n := node.(type) {
 	case string:
 		if name, digest, ok := strings.Cut(n, "@"); ok && strings.HasPrefix(digest, "sha256:") {
-			w.pinned = append(w.pinned, Repository(name)+"@"+digest)
+			w.pinned = append(w.pinned, Pin{Repository: Repository(name), Tag: tag(name), Digest: digest})
 		}
 	case []any:
 		for i, v := range n {
@@ -249,12 +283,12 @@ func (w *images) visit(node any, path string) {
 			if registry, ok := n["registry"].(string); ok && registry != "" {
 				repo = registry + "/" + repo
 			}
-			var digest, inTag string
+			var digest, tag, inTag string
 			if d, ok := n["digest"].(string); ok {
 				digest = d
 			}
-			if tag, ok := n["tag"].(string); ok {
-				_, inTag, _ = strings.Cut(tag, "@")
+			if t, ok := n["tag"].(string); ok {
+				tag, inTag, _ = strings.Cut(t, "@")
 			}
 			switch {
 			case digest != "" && inTag != "":
@@ -263,14 +297,14 @@ func (w *images) visit(node any, path string) {
 				digest = inTag
 			}
 			if strings.HasPrefix(digest, "sha256:") {
-				w.pinned = append(w.pinned, Repository(repo)+"@"+digest)
+				w.pinned = append(w.pinned, Pin{Repository: Repository(repo), Tag: tag, Digest: digest})
 			} else {
 				w.unpinned = append(w.unpinned, path)
 			}
 		}
 		for k, v := range n {
 			// A tag with a digest belongs to the block above.
-			if k == "tag" || (path == "" && k == "charts") {
+			if k == "tag" || (path == "" && (k == "charts" || k == "k3s")) {
 				continue
 			}
 			w.visit(v, strings.TrimPrefix(path+"."+k, "."))
@@ -298,6 +332,14 @@ func Repository(name string) string {
 		return "docker.io/library/" + rest
 	}
 	return name
+}
+
+// tag is the tag of an image name, or "" when it has none.
+func tag(name string) string {
+	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
+		return name[i+1:]
+	}
+	return ""
 }
 
 // Reference is the full form of an image reference by tag, such as

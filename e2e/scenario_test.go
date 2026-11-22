@@ -28,11 +28,12 @@ var scenarioFlag = flag.String("scenario", "", "the scenario to run: its tag, wi
 //
 // It builds e2e/Dockerfile from this checkout for the machine's own
 // architecture, with the tools of the versions file, copies the charts,
-// values, k3s files, monitoring files, feature files and the versions file in
-// and runs the image as one privileged container. Its last step copies the
+// values, k3s files, feature files and the versions file in and runs the
+// image as one privileged container. Its last step copies the
 // run's files out to results/. testcontainers removes the container and its
 // volumes when the test ends, and Ryuk does when the test is killed. Without
-// -scenario it skips, so go test ./... starts no container.
+// -scenario it skips, so go test ./... starts no container. The scenario
+// airgap runs on the machine's own Docker instead (testAirgap).
 func TestScenario(t *testing.T) {
 	if *scenarioFlag == "" {
 		t.Skip("no -scenario")
@@ -41,13 +42,22 @@ func TestScenario(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if *scenarioFlag == airgapScenario {
+		deadline, ok := t.Deadline()
+		if !ok {
+			t.Fatal("a run needs go test's -timeout")
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), deadline.Add(-time.Minute))
+		t.Cleanup(cancel)
+		testAirgap(ctx, t, m)
+		return
+	}
 	t.Logf("the versions file %s: k3s %s", versionsFile, m.K3s.Version)
 	// testcontainers puts a directory under the parent of ContainerFilePath
 	// with its own name, so each name is the same on both sides.
 	files := []testcontainers.ContainerFile{
 		{HostFilePath: "../helm", ContainerFilePath: helmDir, FileMode: 0o755},
 		{HostFilePath: "../ansible/k3s", ContainerFilePath: k3sDir, FileMode: 0o755},
-		{HostFilePath: "monitoring", ContainerFilePath: monitoringDir, FileMode: 0o755},
 		{HostFilePath: "features", ContainerFilePath: featuresDir, FileMode: 0o755},
 		{HostFilePath: versionsFile, ContainerFilePath: manifestFile, FileMode: 0o644},
 	}

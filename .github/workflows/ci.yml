@@ -51,7 +51,7 @@ jobs:
           "$RUNNER_TEMP/golangci-lint" config verify
           "$RUNNER_TEMP/golangci-lint" run ./...
       - name: shellcheck
-        run: shellcheck e2e/*.sh
+        run: shellcheck e2e/*.sh e2e/images/*/*.sh
 
   # go vet and go test. Without -scenario, TestScenario skips, so no
   # container starts.

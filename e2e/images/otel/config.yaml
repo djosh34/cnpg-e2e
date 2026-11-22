@@ -1,0 +1,29 @@
+# The client certificate comes from the company CA. Every metric keeps the
+# name the scrape gave it.
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        tls:
+          cert_file: /tls/tls.crt
+          key_file: /tls/tls.key
+          client_ca_file: /tls/ca.crt
+exporters:
+  prometheus_remote_write:
+    endpoint: http://prometheus.example.test:9090/api/v1/write
+    translation_strategy: UnderscoreEscapingWithoutSuffixes
+    tls:
+      insecure: true
+    # One sender, so the samples of a series arrive in order.
+    remote_write_queue:
+      num_consumers: 1
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus_remote_write]

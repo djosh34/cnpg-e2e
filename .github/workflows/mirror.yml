@@ -1,0 +1,44 @@
+name: mirror
+
+# Copies the images and charts of versions/versions.yaml into this repo's
+# packages, from Docker Hardened Images and the upstream barman-cloud chart,
+# by the tags the file names, with their signatures and attestations. It
+# uploads the versions file with the digests it copied, for a pull request
+# to take in.
+on:
+  workflow_dispatch:
+  push:
+    branches: [work/47-outside-nodes-fill]
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: e2e/go.mod
+          cache-dependency-path: e2e/go.sum
+      - name: Copy
+        env:
+          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
+          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          docker login dhi.io --username "$DHI_USERNAME" --password-stdin <<<"$DHI_TOKEN"
+          docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
+          go -C e2e run ./cmd/mirror ../versions/versions.yaml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: versions
+          path: versions/versions.yaml
+          if-no-files-found: error
