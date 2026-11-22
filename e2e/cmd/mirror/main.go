@@ -22,7 +22,7 @@ func main() {
 		log.Print("usage: mirror <versions file>")
 		os.Exit(2)
 	}
-	if err := registry.Mirror(context.Background(), registry.Client(), os.Args[1]); err != nil {
+	if err := registry.Mirror(context.Background(), os.Args[1]); err != nil {
 		log.Fatal("mirror: ", err)
 	}
 }

@@ -24,7 +24,7 @@ var sources = map[string]string{
 // signatures and attestations. It then writes the digest each tag had at
 // its source into the file, in place of the one there. Each package must be
 // public before a run without a login can pull it.
-func Mirror(ctx context.Context, rc *regclient.RegClient, file string) error {
+func Mirror(ctx context.Context, file string) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return err
@@ -53,7 +53,9 @@ func Mirror(ctx context.Context, rc *regclient.RegClient, file string) error {
 		if s, ok := sources[name]; ok {
 			src = s
 		}
-		digest, err := mirror(ctx, rc, src+":"+p.Tag, p.Repository+":"+p.Tag)
+		// A new client for each package: with one client for all of them,
+		// dhi.io answered unauthorized from the second repository on.
+		digest, err := mirror(ctx, Client(), src+":"+p.Tag, p.Repository+":"+p.Tag)
 		if err != nil {
 			return err
 		}
