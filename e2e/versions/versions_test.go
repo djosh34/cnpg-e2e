@@ -87,7 +87,7 @@ func TestCheck(t *testing.T) {
 	half := strings.Replace(string(data), "    alias: cert-manager\n", "", 1)
 	half = strings.Replace(half, "  postgresGID: 70\n", "", 1)
 	if _, err := Parse([]byte(half)); err == nil || !strings.Contains(err.Error(), "no charts.cert-manager with both name and alias, or neither") ||
-		!strings.Contains(err.Error(), "no postgresql.postgresUID and postgresGID") {
+		!strings.Contains(err.Error(), "no postgresql.postgresUID and postgresGID, both above 0") {
 		t.Errorf("a name without an alias and a uid without a gid: %v", err)
 	}
 	// The agent's image without its digest, as a tag only.

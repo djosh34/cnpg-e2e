@@ -185,8 +185,6 @@ var stateCommands = [][]string{
 	{"docker", "logs", "--tail", "30", "k3s-1"},
 	{"docker", "logs", "--tail", "30", "k3s-2"},
 	{"docker", "logs", "--tail", "30", "k3s-3"},
-	// The newest API audit events, when the settings have an audit log.
-	{"docker", "exec", "k3s-1", "tail", "-n", "5", "/var/lib/rancher/k3s/server/logs/audit.log"},
 	// The images on each node, also when always.feature stopped before it
 	// checked them.
 	{"docker", "exec", "k3s-1", "crictl", "images", "--digests"},

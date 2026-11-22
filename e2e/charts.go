@@ -82,7 +82,7 @@ func installCharts(ctx context.Context, firstImage string) (chartValues, error) 
 			return chartValues{}, err
 		}
 		// In values, so pg-restore gets the ids too.
-		if pg := manifest.PostgreSQL; r.Name == clusterRelease && pg.PostgresUID > 0 {
+		if pg := manifest.PostgreSQL; r.Name == clusterRelease {
 			values = append(values, "--set", fmt.Sprintf("cluster.postgresUID=%d,cluster.postgresGID=%d", pg.PostgresUID, pg.PostgresGID))
 		}
 		args := append([]string{"upgrade", "--install", r.Name, chart, "--namespace", r.Namespace,

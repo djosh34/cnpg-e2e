@@ -79,7 +79,7 @@ type Chart struct {
 // PostgreSQL are the instance images. The cnpg-cluster charts read
 // ImageName; RolloutFrom is the image the rollout scenario starts on.
 // PostgresUID and PostgresGID are the ids both images name postgres, which
-// the cluster gets; 0 leaves the cnpg-cluster chart's own.
+// the cluster gets.
 type PostgreSQL struct {
 	ImageName   string `yaml:"imageName"`
 	RolloutFrom string `yaml:"rolloutFrom"`
@@ -167,8 +167,7 @@ func (m *Manifest) check() error {
 	}
 	need(strings.Contains(m.PostgreSQL.ImageName, "@sha256:"), "postgresql.imageName with a digest")
 	need(strings.Contains(m.PostgreSQL.RolloutFrom, "@sha256:"), "postgresql.rolloutFrom with a digest")
-	need((m.PostgreSQL.PostgresUID > 0) == (m.PostgreSQL.PostgresGID > 0) && m.PostgreSQL.PostgresUID >= 0 && m.PostgreSQL.PostgresGID >= 0,
-		"postgresql.postgresUID and postgresGID, both above 0, or neither")
+	need(m.PostgreSQL.PostgresUID > 0 && m.PostgreSQL.PostgresGID > 0, "postgresql.postgresUID and postgresGID, both above 0")
 	return errors.Join(errs...)
 }
 
