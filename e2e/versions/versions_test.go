@@ -42,16 +42,19 @@ func TestImages(t *testing.T) {
 		},
 		"charts": map[string]any{"c": map[string]any{"repository": "https://charts.example", "version": "1.0.0"}},
 	}, "")
-	slices.Sort(w.pinned)
 	if want := []string{"chart.byTag"}; !slices.Equal(w.unpinned, want) {
 		t.Errorf("unpinned: got %q, want %q", w.unpinned, want)
 	}
-	got := w.pinned
+	var got []string
+	for _, p := range w.pinned {
+		got = append(got, p.String())
+	}
+	slices.Sort(got)
 	want := []string{
-		"docker.io/library/busybox@" + digest,
-		"ghcr.io/c/d@" + digest,
-		"quay.io/a/b@" + digest,
-		"registry.example/pg@" + digest,
+		"docker.io/library/busybox:@" + digest,
+		"ghcr.io/c/d:v2@" + digest,
+		"quay.io/a/b:v1@" + digest,
+		"registry.example/pg:18@" + digest,
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("got %q, want %q", got, want)
@@ -60,17 +63,32 @@ func TestImages(t *testing.T) {
 
 const file = "../../versions/versions.yaml"
 
-// The versions file has what a run reads, and Pinned has its k3s and
-// PostgreSQL images.
+// The versions file has what a run reads. Pinned has its registry and
+// PostgreSQL images but not k3s's node image, and every image and chart but
+// k3s's is one of this repo's packages.
 func TestVersionsFile(t *testing.T) {
 	m, err := Load(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, image := range []string{m.K3s.Image, m.PostgreSQL.ImageName, m.PostgreSQL.RolloutFrom} {
+	for _, image := range []string{m.Registry.Image, m.PostgreSQL.ImageName, m.PostgreSQL.RolloutFrom} {
 		name, d, _ := strings.Cut(image, "@")
 		if !slices.Contains(m.Pinned(), Repository(name)+"@"+d) {
 			t.Errorf("%s is not in Pinned", image)
+		}
+	}
+	name, d, _ := strings.Cut(m.K3s.Image, "@")
+	if slices.Contains(m.Pinned(), Repository(name)+"@"+d) {
+		t.Errorf("the node image %s is in Pinned", m.K3s.Image)
+	}
+	for _, p := range m.Images() {
+		if !strings.HasPrefix(p.Repository, Packages+"/") || p.Tag == "" {
+			t.Errorf("%s is not one of this repo's packages by tag", p)
+		}
+	}
+	for name, c := range m.Charts {
+		if c.Repository != "oci://"+Packages {
+			t.Errorf("the chart %s is in %s", name, c.Repository)
 		}
 	}
 }
@@ -105,19 +123,19 @@ func TestCheck(t *testing.T) {
 	}
 	// The solver's block under a literal dotted key, which Helm does not read.
 	dotted := string(data[:solver]) + string(data[solver+end:]) +
-		"\"cert-manager.acmesolver.image\":\n  registry: ghcr.io\n  repository: djosh34/hardened-mirror/cert-manager-acmesolver\n  digest: sha256:" + strings.Repeat("0", 64) + "\n"
+		"\"cert-manager.acmesolver.image\":\n  registry: ghcr.io\n  repository: djosh34/cnpg-e2e/cert-manager-acmesolver\n  digest: sha256:" + strings.Repeat("0", 64) + "\n"
 	if _, err := Parse([]byte(dotted)); err == nil || !strings.Contains(err.Error(), "no image cert-manager.acmesolver.image") {
 		t.Errorf("a chart image under a dotted key: %v", err)
 	}
 	// A second digest next to the sidecar's tag, which its chart ignores.
-	twoDigests := strings.Replace(string(data), "    repository: djosh34/hardened-mirror/cloudnative-pg-plugin-barman-cloud-sidecar\n",
-		"    repository: djosh34/hardened-mirror/cloudnative-pg-plugin-barman-cloud-sidecar\n    digest: sha256:"+strings.Repeat("1", 64)+"\n", 1)
+	twoDigests := strings.Replace(string(data), "    repository: djosh34/cnpg-e2e/cloudnative-pg-plugin-barman-cloud-sidecar\n",
+		"    repository: djosh34/cnpg-e2e/cloudnative-pg-plugin-barman-cloud-sidecar\n    digest: sha256:"+strings.Repeat("1", 64)+"\n", 1)
 	if _, err := Parse([]byte(twoDigests)); err == nil ||
 		!strings.Contains(err.Error(), "the image plugin-barman-cloud.sidecarImage has a digest in digest and in tag") {
 		t.Errorf("an image with two digests: %v", err)
 	}
 	// The solver's block without its repository.
-	noRepo := strings.Replace(string(data), "      repository: djosh34/hardened-mirror/cert-manager-acmesolver\n", "", 1)
+	noRepo := strings.Replace(string(data), "      repository: djosh34/cnpg-e2e/cert-manager-acmesolver\n", "", 1)
 	if _, err := Parse([]byte(noRepo)); err == nil || !strings.Contains(err.Error(), "no image cert-manager.acmesolver.image with a repository") {
 		t.Errorf("a chart image without its repository: %v", err)
 	}

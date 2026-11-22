@@ -285,7 +285,7 @@ func TestK3sPatches(t *testing.T) {
 // panels its lines read: Replica lag, with a query it shows in red, and
 // Instances, with one query.
 func TestDashboard(t *testing.T) {
-	data, err := os.ReadFile("monitoring/dashboard.json")
+	data, err := os.ReadFile("images/grafana/dashboard.json")
 	if err != nil {
 		t.Fatal(err)
 	}

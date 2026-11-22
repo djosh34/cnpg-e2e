@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/djosh34/cnpg-e2e/e2e/images"
 )
 
 // The services outside k3s that the nodes need: DNS, the store and the
@@ -23,7 +25,7 @@ const (
 
 	corednsImage = "coredns/coredns:1.15.0@sha256:0a9d8c8ddf34347eb59aad9a8784f0710de88d6d112726d11d271f9bc6daca26"
 	openbaoImage = "openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f"
-	s3Image      = "versity/versitygw:v1.10.0@sha256:89cad13cc981986ee284cbafea4613f9533ce6fd5f37a2c96c4c4fb8adb3a316"
+	s3Image      = "ghcr.io/versity/versitygw:v1.10.0@sha256:89cad13cc981986ee284cbafea4613f9533ce6fd5f37a2c96c4c4fb8adb3a316"
 )
 
 // The ACME directory of the company CA, and the role its certificates come
@@ -49,42 +51,17 @@ func hosts() string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-const corefile = `.:53 {
-    hosts /etc/coredns/hosts {
-        fallthrough
-    }
-    forward . /etc/resolv.conf
-    errors
-}
-`
-
+// startDNS starts CoreDNS with the Corefile of images/dns.
 func startDNS(ctx context.Context) error {
+	corefile, err := images.Read("dns/Corefile")
+	if err != nil {
+		return err
+	}
 	return container{
 		name: "dns", ip: dnsIP, image: corednsImage, args: []string{"-conf", "/etc/coredns/Corefile"},
 		files: map[string]string{"/etc/coredns/Corefile": corefile, "/etc/coredns/hosts": hosts()},
 	}.run(ctx)
 }
-
-// The company CA: OpenBao's PKI with the run's root, serving ACME on 443 with
-// EAB required, http-01 checked through the e2e test's DNS, and only the
-// approved names: the nodes and the client. Port 8200 serves the API to the
-// run without TLS, on the e2e network only.
-const openbaoConfig = `storage "raft" {
-  path    = "/openbao/file"
-  node_id = "acme"
-}
-cluster_addr = "http://127.0.0.1:8201"
-api_addr     = "https://acme.example.test"
-listener "tcp" {
-  address     = "0.0.0.0:8200"
-  tls_disable = true
-}
-listener "tcp" {
-  address       = "0.0.0.0:443"
-  tls_cert_file = "/bao/tls.crt"
-  tls_key_file  = "/bao/tls.key"
-}
-`
 
 // openbao is the API of the ACME server's OpenBao, for the e2e test.
 type openbao struct {
@@ -92,22 +69,36 @@ type openbao struct {
 	token string
 }
 
+// startACME starts the company CA with the OpenBao config of images/acme,
+// then sets it up.
 func startACME(ctx context.Context, root *ca) (*openbao, error) {
 	cert, key, err := root.serverCert(acmeName)
 	if err != nil {
 		return nil, err
 	}
+	config, err := images.Read("acme/bao.hcl")
+	if err != nil {
+		return nil, err
+	}
 	err = container{
 		name: "acme", ip: acmeIP, image: openbaoImage, args: []string{"server", "-config=/bao/bao.hcl"},
-		files: map[string]string{"/bao/bao.hcl": openbaoConfig, "/bao/tls.crt": string(cert), "/bao/tls.key": string(key)},
+		files: map[string]string{"/bao/bao.hcl": config, "/bao/tls.crt": string(cert), "/bao/tls.key": string(key)},
 	}.run(ctx)
 	if err != nil {
 		return nil, err
 	}
+	return setUpACME(ctx, root)
+}
+
+// setUpACME sets up the company CA, once its OpenBao answers: OpenBao's PKI
+// with the run's root, serving ACME on 443 with EAB required, http-01
+// checked through the e2e test's DNS, and only the approved names: the
+// nodes and the client.
+func setUpACME(ctx context.Context, root *ca) (*openbao, error) {
 	// Init can take longer than 10 s, and a second init fails, so it runs
 	// once, after OpenBao answers.
 	bao := &openbao{http: &http.Client{Timeout: 2 * time.Minute}}
-	err = poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
+	err := poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
 		return bao.call(ctx, http.MethodGet, "sys/init", nil, nil)
 	})
 	if err != nil {

@@ -1,7 +1,9 @@
 # Every version of the system under test that an e2e run uses, and a values
 # file of every release. Every chart and every image the charts and the
-# cluster run come from the mirror ghcr.io/djosh34/hardened-mirror: hardened
-# builds, each pinned by digest.
+# cluster run are this repo's packages under ghcr.io/djosh34/cnpg-e2e:
+# copies of Docker Hardened Images (DHI), and of the upstream barman-cloud
+# chart, which DHI does not have, each pinned by digest. e2e/cmd/mirror
+# copies them by the tags named here and writes the digests it copied.
 
 # The k3s release of the nodes. Before k3s starts, each node gets the airgap
 # tarball of its architecture, and k3s imports its images: those of the
@@ -39,93 +41,104 @@ tools:
     url: https://raw.githubusercontent.com/k3s-io/k3s/v1.37.2%2Bk3s1/contrib/util/rotate-default-ca-certs.sh
     sha256: 62ef79f530cd285b3cfce884746abe6c3712ad70d0ef66e81f76aaa93c30551b
 
-# The mirror's charts, as OCI charts. The run writes each into the dependency
-# of its wrapper chart, and helm dependency build pulls it. name is the
-# mirror's chart, and alias the wrapper's dependency name, under which its
-# values stay.
+# The charts, as OCI charts, by version and by the digest of their OCI
+# manifest. The run writes each into the dependency of its wrapper chart, and
+# helm dependency build pulls it. name is the package's chart, and alias the
+# wrapper's dependency name, under which its values stay.
 charts:
   cert-manager:
     name: cert-manager-chart
     alias: cert-manager
-    repository: oci://ghcr.io/djosh34/hardened-mirror
+    repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "1.21.3"
+    digest: sha256:d7c2de29812898cd64ca1745628df37b78da74b7e21dfac4e5628b6407235b42
   cloudnative-pg:
     name: cloudnative-pg-chart
     alias: cloudnative-pg
-    repository: oci://ghcr.io/djosh34/hardened-mirror
+    repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.29.2"
+    digest: sha256:9089c1dea04e7b664cb641b26191574fd33900d3ca6fe0790824c3ccff18cdfa
   opentelemetry-collector:
     name: opentelemetry-collector-chart
     alias: opentelemetry-collector
-    repository: oci://ghcr.io/djosh34/hardened-mirror
+    repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.180.0"
+    digest: sha256:6ad21aa35bd7f3c699690656fbde7f5b9845bb7f5d869d593f5f5a8a324b6cb0
   plugin-barman-cloud:
     name: plugin-barman-cloud
     alias: plugin-barman-cloud
-    repository: oci://ghcr.io/djosh34/hardened-mirror
+    repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.9.0"
+    digest: sha256:d34ada2eedffaee9153c6ae31e0e5b93fd28765cc8fba7c5fb45d4ed6b60df1a
+
+# The registry of the nodes, CNCF Distribution v3, which also takes the
+# images the fill copies in, and the pause image of the prepull.
+registry:
+  image: ghcr.io/djosh34/cnpg-e2e/distribution-registry:3.1.2@sha256:10e21241a861d8f96af3423bbae69c16d57ff9fa17cb42706fb1f212de79eb43
+prepull:
+  image: ghcr.io/djosh34/cnpg-e2e/kubernetes-pause:3.10.2@sha256:19906bc2350b1f030e4803b58de88198d43e79394e99c7d34463c9aaead13521
 
 # The instance images, which the cnpg-cluster charts read. The rollout
 # scenario starts on rolloutFrom, an older build, and rolls out to
 # imageName. Both name postgres 70, so the cluster gets that uid and gid.
 postgresql:
-  imageName: ghcr.io/djosh34/hardened-mirror/postgres:18.7-debian13@sha256:3fc42f4f36adcc9de711ddd1750c715c960fb842c0947ff3b2cf53f70dff30ad
-  rolloutFrom: ghcr.io/djosh34/hardened-mirror/postgres:18.6-debian13@sha256:a52ca74a5c7da183e0fb7e089d666375d8916855df375268ccb4ed691c85746c
+  imageName: ghcr.io/djosh34/cnpg-e2e/postgres:18.7-debian13@sha256:c10fed18bc412ce45b7381ef13b40bc3f4461b84a73d7766ce82b260413dc69b
+  rolloutFrom: ghcr.io/djosh34/cnpg-e2e/postgres:18.6-debian13@sha256:a52ca74a5c7da183e0fb7e089d666375d8916855df375268ccb4ed691c85746c
   postgresUID: 70
   postgresGID: 70
 
 # The images of the charts, each under its wrapper chart's dependency name
-# and in the chart's own values, pinned by digest. The mirror's charts
-# default to the registry dhi.io, so each block that has registry sets it.
+# and in the chart's own values, pinned by digest. The DHI charts default to
+# the registry dhi.io, so each block that has registry sets it.
 cert-manager:
   image:
     registry: ghcr.io
-    repository: djosh34/hardened-mirror/cert-manager-controller
+    repository: djosh34/cnpg-e2e/cert-manager-controller
     tag: "1.21.3"
-    digest: sha256:dad9f8636023c102c32a2fb62a3131130b2c0fafd8cb094b395460150b0f166d
+    digest: sha256:550ad562f21f4c0d3a3848b5e2ebea0fffe7c34c97256fccdef9666ad8a494bb
   webhook:
     image:
       registry: ghcr.io
-      repository: djosh34/hardened-mirror/cert-manager-webhook
+      repository: djosh34/cnpg-e2e/cert-manager-webhook
       tag: "1.21.3"
-      digest: sha256:07e4ad92c80bda3dcccfded6e5c8b26493a2e744688eec6845a2568ba3453bf3
+      digest: sha256:3fa5b26106d1062f7beecf4a4314c87a8da0f7958c11f28261edffbe7514aacb
   cainjector:
     image:
       registry: ghcr.io
-      repository: djosh34/hardened-mirror/cert-manager-cainjector
+      repository: djosh34/cnpg-e2e/cert-manager-cainjector
       tag: "1.21.3"
-      digest: sha256:42c67a058c213679709cce46a73e5b19289669d063ff4c8ad1f2101ae3d2e395
+      digest: sha256:171553b187293cf308db57a1f1632018c21cb39311f82a45c1e17ad33757a6a1
   acmesolver:
     image:
       registry: ghcr.io
-      repository: djosh34/hardened-mirror/cert-manager-acmesolver
+      repository: djosh34/cnpg-e2e/cert-manager-acmesolver
       tag: "1.21.3"
-      digest: sha256:6aa6c613c67bf7dbe5f9552f03ef5cedcbdd9b900451a35771874ca65ecd5554
+      digest: sha256:5e2834dbe10314e33b50b4c5404a8f8f12b08f6f3f311a03ec3e9b1da36bb4aa
   startupapicheck:
     image:
       registry: ghcr.io
-      repository: djosh34/hardened-mirror/cert-manager-startupapicheck
+      repository: djosh34/cnpg-e2e/cert-manager-startupapicheck
       tag: "1.21.3"
-      digest: sha256:011e1f71407a66bb08d4a4d4196920c4f699c086abc50318379230256de9830a
+      digest: sha256:4236358b0d2f4fa7fb39e009024701a0e57106efb2e51f7163c5fcbe65a420f8
 
 # The chart has no digest field, so the digest is in the tag.
 cloudnative-pg:
   image:
-    repository: ghcr.io/djosh34/hardened-mirror/cloudnative-pg
-    tag: "1.30.2@sha256:c895d00f76fbeeb96d2ac1194232b7466f1c6c0fade24e5b7e0efd8133d2b2f0"
+    repository: ghcr.io/djosh34/cnpg-e2e/cloudnative-pg
+    tag: "1.30.2@sha256:657def6d9632606a971805254ae448963e12b7615c100c78748707ee26c56725"
 
 plugin-barman-cloud:
   image:
     registry: ghcr.io
-    repository: djosh34/hardened-mirror/cloudnative-pg-plugin-barman-cloud
-    tag: "0.16.0@sha256:86b9fbbcfb167330250330852726776a9f30085634aad7dd2c4e00c3f6fd627e"
+    repository: djosh34/cnpg-e2e/cloudnative-pg-plugin-barman-cloud
+    tag: "0.16.0@sha256:875ff4536cd02799efb5de917deedc86d1127459bb6c59cf700b283302a1b9ca"
   sidecarImage:
     registry: ghcr.io
-    repository: djosh34/hardened-mirror/cloudnative-pg-plugin-barman-cloud-sidecar
-    tag: "0.16.0@sha256:950682d7cb86c26e702ea3a218bcaef924caf3f5ab84e65f3310f2f919c2c5ca"
+    repository: djosh34/cnpg-e2e/cloudnative-pg-plugin-barman-cloud-sidecar
+    tag: "0.16.0@sha256:d389ad25d9bb9a92eb0f6262618551a8ac9b1b149df73e8ce584fb18392719e9"
 
 # The two collectors of the cnpg-opentelemetry-collector chart, both the
-# opentelemetry-collector chart, on the mirror's contrib build. The wrapper
+# opentelemetry-collector chart, on DHI's contrib build. The wrapper
 # starts otelcol-k8s, which this image does not have: an empty command.name
 # leaves the command out, so the image's own entrypoint, otelcol-contrib,
 # runs.
@@ -133,13 +146,13 @@ agent:
   command:
     name: ""
   image:
-    repository: ghcr.io/djosh34/hardened-mirror/opentelemetry-collector
+    repository: ghcr.io/djosh34/cnpg-e2e/opentelemetry-collector
     tag: "0.165.0-contrib"
-    digest: sha256:a04581d763bbe7aa108e071e154f5bc31ecd508fa448233a4367a276940eada6
+    digest: sha256:8ecab6774570e7a152e5b01c21830c6286c283a55fc3ba75eb12eeeed3fff318
 cluster:
   command:
     name: ""
   image:
-    repository: ghcr.io/djosh34/hardened-mirror/opentelemetry-collector
+    repository: ghcr.io/djosh34/cnpg-e2e/opentelemetry-collector
     tag: "0.165.0-contrib"
-    digest: sha256:a04581d763bbe7aa108e071e154f5bc31ecd508fa448233a4367a276940eada6
+    digest: sha256:8ecab6774570e7a152e5b01c21830c6286c283a55fc3ba75eb12eeeed3fff318

@@ -5,10 +5,11 @@
 //	e2e <scenario>
 //
 // The scenario is the tag of one scenario, without the @. The cluster is
-// built from the charts and values in /helm, the k3s files in /k3s and the
-// monitoring files in /monitoring, with every version from the versions file
-// /versions.yaml. TestScenario of scenario_test.go copies them from the
-// checkout before the container starts; the run never writes into them.
+// built from the charts and values in /helm and the k3s files in /k3s, with
+// every version from the versions file /versions.yaml. TestScenario of
+// scenario_test.go copies them from the checkout before the container
+// starts; the run never writes into them. The monitoring files are those of
+// e2e/images, built into the runner.
 // The run writes its files into a new directory of /results, which
 // TestScenario copies out at the end. The exit code is 0 when the scenario
 // passed, 1 when it failed, and 2 when it could not run.
@@ -30,8 +31,6 @@ const (
 	helmDir = "/helm"
 	// ansible/k3s/.
 	k3sDir = "/k3s"
-	// e2e/monitoring/.
-	monitoringDir = "/monitoring"
 	// e2e/features/.
 	featuresDir = "/features"
 	// versions/versions.yaml.

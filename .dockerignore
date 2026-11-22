@@ -2,8 +2,7 @@
 # repository root.
 *
 !e2e/
-# TestScenario copies these two in when the container starts.
+# TestScenario copies these in when the container starts.
 e2e/features/
-e2e/monitoring/
 # The build needs no tests.
 e2e/**/*_test.go
