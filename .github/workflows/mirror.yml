@@ -7,8 +7,6 @@ name: mirror
 # to take in.
 on:
   workflow_dispatch:
-  push:
-    branches: [work/47-outside-nodes-fill]
 
 permissions:
   contents: read
