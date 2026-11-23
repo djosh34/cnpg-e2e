@@ -88,7 +88,8 @@ func (s *scenario) setUp(w *world, sn *godog.Scenario) error {
 // its cluster was built; after a failed line, it first ends the outages
 // still in place. It keeps the client's log, the cluster's state and the
 // nodes' logs, prints the timing table and, on a failure, the state. An
-// error in keeping them is also in s.fault.
+// error in keeping them goes to s.fault alone, so it never makes a passed
+// scenario fail; runScenario reports it.
 func (s *scenario) tearDown(sn *godog.Scenario, err error) error {
 	if s.w != nil {
 		if err != nil {
@@ -123,7 +124,7 @@ func (s *scenario) tearDown(sn *godog.Scenario, err error) error {
 		fault = errors.Join(fault, s.results.write("images.txt", strings.Join(slices.Compact(s.images), "\n")+"\n"))
 	}
 	s.fault = errors.Join(fault, s.results.write("timing.md", table), s.results.write("state.txt", state), nodeLogs(keep, s.results))
-	return errors.Join(err, s.fault)
+	return err
 }
 
 // nodeLogs writes the log of k3s on each node, from its journal, to
