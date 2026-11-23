@@ -1,13 +1,10 @@
-// Package versions reads the versions file, versions/versions.yaml: every
-// version of the system under test that an e2e run uses.
-// helm/helmfile.yaml.gotmpl reads the same file and gives each release its
-// images from it.
+// Package versions reads versions/versions.yaml. helm/helmfile.yaml.gotmpl
+// reads the same file and gives each release its images from it.
 package versions
 
 import (
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -15,107 +12,81 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Packages is where this repo publishes its images and charts. The
-// versions file names only images and charts there, besides k3s's own.
+// File is the versions file, from the root of the checkout.
+const File = "versions/versions.yaml"
+
+// Packages is where this repo publishes its images and charts.
 const Packages = "ghcr.io/djosh34/cnpg-e2e"
 
-// Manifest is what the e2e run reads from a manifest besides the charts'
-// own values, which only helmfile reads.
 type Manifest struct {
-	K3s        K3s              `yaml:"k3s"`
-	Tools      Tools            `yaml:"tools"`
-	Charts     map[string]Chart `yaml:"charts"`
-	Registry   Registry         `yaml:"registry"`
-	PostgreSQL PostgreSQL       `yaml:"postgresql"`
+	K3s       K3s                 `yaml:"k3s"`
+	SELinux   map[string]Download `yaml:"selinux"`
+	NodeTools map[string]Download `yaml:"nodeTools"`
+	Charts    map[string]Chart    `yaml:"charts"`
+	Registry  struct {
+		Image string `yaml:"image"`
+	} `yaml:"registry"`
+	PostgreSQL struct {
+		ImageName string `yaml:"imageName"`
+	} `yaml:"postgresql"`
+	Lab Lab `yaml:"lab"`
 
-	// images are the images the manifest pins by digest, each once.
-	images []Pin
+	// Every image of the cluster as repository@digest, each once.
+	Pinned []string `yaml:"-"`
 }
 
-// Registry is the registry of the nodes: its image by tag and digest.
-type Registry struct {
-	Image string `yaml:"image"`
-}
-
-// Pin is an image the manifest pins: its repository in its full form, its
-// tag and its digest.
-type Pin struct {
-	Repository, Tag, Digest string
-}
-
-// K3s is the k3s release of the nodes.
 type K3s struct {
-	Version string `yaml:"version"`
-	// The airgap image tarball of each architecture, which k3s imports at
-	// start.
-	Airgap map[string]Download `yaml:"airgap"`
-	// The images in the tarballs, the release's k3s-images.txt.
+	Version  string   `yaml:"version"`
+	Binary   Download `yaml:"binary"`
+	Install  Download `yaml:"install"`
+	Airgap   Download `yaml:"airgap"`
+	RotateCA Download `yaml:"rotate-ca"`
+	// The images of the airgap tarball, which k3s imports by tag.
 	Images []string `yaml:"images"`
-	// The release one minor before, which the k3s upgrade scenarios start
-	// from.
-	Previous struct {
-		Version string `yaml:"version"`
-	} `yaml:"previous"`
 }
 
-// Download is a file of a release and its sha256.
 type Download struct {
 	URL    string `yaml:"url"`
 	SHA256 string `yaml:"sha256"`
 }
 
-// Tools are the tools of the e2e test that have to match the cluster.
-type Tools struct {
-	Kubectl     Tool `yaml:"kubectl"`
-	KubectlCNPG Tool `yaml:"kubectl-cnpg"`
-}
-
-// Tool is a binary with the sha256 of its download for each architecture.
-type Tool struct {
-	Version string            `yaml:"version"`
-	SHA256  map[string]string `yaml:"sha256"`
-}
-
-// Chart is an upstream chart in an OCI registry: Name is the chart's own
-// name, such as cert-manager-chart for the key cert-manager, and Digest the
-// digest of its OCI manifest.
+// Chart is an upstream chart: name is its name in the OCI repository.
 type Chart struct {
 	Name       string `yaml:"name"`
 	Repository string `yaml:"repository"`
 	Version    string `yaml:"version"`
-	Digest     string `yaml:"digest"`
 }
 
-// PostgreSQL is the instance image, which the cnpg-cluster chart reads.
-// PostgresUID and PostgresGID are the ids it names postgres, which the
-// cluster gets.
-type PostgreSQL struct {
-	ImageName   string `yaml:"imageName"`
-	PostgresUID int    `yaml:"postgresUID"`
-	PostgresGID int    `yaml:"postgresGID"`
+// Lab is what the e2e lab runs: the images and the tools, besides the
+// cluster.
+type Lab struct {
+	Node         string   `yaml:"node"`
+	Controller   string   `yaml:"controller"`
+	AnsibleCore  string   `yaml:"ansible-core"`
+	VM           string   `yaml:"vm"`
+	VMDisk       Download `yaml:"vm-disk"`
+	DNS          string   `yaml:"dns"`
+	ACME         string   `yaml:"acme"`
+	S3           string   `yaml:"s3"`
+	OTel         string   `yaml:"otel"`
+	Prometheus   string   `yaml:"prometheus"`
+	Alertmanager string   `yaml:"alertmanager"`
+	Grafana      string   `yaml:"grafana"`
+	Kubectl      Tool     `yaml:"kubectl"`
+	KubectlCNPG  Tool     `yaml:"kubectl-cnpg"`
 }
 
-var (
-	sha256Hex    = regexp.MustCompile(`^[0-9a-f]{64}$`)
-	sha256Digest = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	// An exact chart version, not a range: Helm would pick a newer chart.
-	exactVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
-)
-
-// Load reads a manifest and checks that every part the run reads is there.
-func Load(file string) (*Manifest, error) {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-	m, err := Parse(data)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", file, err)
-	}
-	return m, nil
+type Tool struct {
+	Version string `yaml:"version"`
+	SHA256  string `yaml:"sha256"`
 }
 
-// Parse reads a manifest from its content.
+// An exact chart version, not a range, which helm would resolve to a newer
+// chart.
+var exactVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
+
+// Parse reads a versions file and checks that each chart has an exact
+// version and each image of the cluster a digest.
 func Parse(data []byte) (*Manifest, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -125,206 +96,107 @@ func Parse(data []byte) (*Manifest, error) {
 	if err := doc.Decode(&m); err != nil {
 		return nil, err
 	}
-	var all any
-	if err := doc.Decode(&all); err != nil {
-		return nil, err
-	}
-	var w images
-	w.visit(&doc, "")
-	pinned := make([]Pin, 0, len(w.sites))
-	for _, s := range w.sites {
-		pinned = append(pinned, s.pin)
-	}
-	slices.SortFunc(pinned, func(a, b Pin) int { return strings.Compare(a.String(), b.String()) })
-	m.images = slices.Compact(pinned)
-	slices.Sort(w.unpinned)
-	errs := []error{m.check()}
-	for _, path := range w.unpinned {
-		errs = append(errs, fmt.Errorf("the image %s has no digest", path))
-	}
-	for _, path := range w.twoDigests {
-		errs = append(errs, fmt.Errorf("the image %s has a digest in digest and in tag", path))
-	}
-	for _, c := range chartImages {
-		if !c.pinnedIn(all) {
-			errs = append(errs, fmt.Errorf("no image %s with a repository and its digest in %s", strings.Join(c.keys, "."), c.field))
+	var errs []error
+	for name, c := range m.Charts {
+		if c.Name == "" || c.Repository == "" || !exactVersion.MatchString(c.Version) {
+			errs = append(errs, fmt.Errorf("charts.%s needs name, repository and an exact version", name))
 		}
+	}
+	sites, unpinned := imageSites(&doc)
+	for _, s := range sites {
+		m.Pinned = append(m.Pinned, s.pin.Repository+"@"+s.pin.Digest)
+	}
+	slices.Sort(m.Pinned)
+	m.Pinned = slices.Compact(m.Pinned)
+	for _, path := range unpinned {
+		errs = append(errs, fmt.Errorf("the image %s has no digest", path))
 	}
 	return &m, errors.Join(errs...)
 }
 
-func (m *Manifest) check() error {
+// Check fails on each lab pin that is missing, by its name.
+func (l Lab) Check() error {
 	var errs []error
-	need := func(ok bool, what string) {
-		if !ok {
-			errs = append(errs, fmt.Errorf("no %s", what))
+	for name, value := range map[string]string{
+		"node": l.Node, "controller": l.Controller, "ansible-core": l.AnsibleCore, "vm": l.VM,
+		"vm-disk": l.VMDisk.SHA256, "dns": l.DNS, "acme": l.ACME, "s3": l.S3, "otel": l.OTel,
+		"prometheus": l.Prometheus, "alertmanager": l.Alertmanager, "grafana": l.Grafana,
+		"kubectl": l.Kubectl.SHA256, "kubectl-cnpg": l.KubectlCNPG.SHA256,
+	} {
+		if value == "" {
+			errs = append(errs, fmt.Errorf("no lab.%s in %s", name, File))
 		}
 	}
-	need(m.K3s.Version != "", "k3s.version")
-	need(len(m.K3s.Images) > 0, "k3s.images")
-	// The run is amd64 only.
-	a := m.K3s.Airgap["amd64"]
-	need(a.URL != "" && sha256Hex.MatchString(a.SHA256), "k3s.airgap.amd64 with url and sha256")
-	need(sha256Hex.MatchString(m.Tools.Kubectl.SHA256["amd64"]), "tools.kubectl.sha256.amd64")
-	need(sha256Hex.MatchString(m.Tools.KubectlCNPG.SHA256["amd64"]), "tools.kubectl-cnpg.sha256.amd64")
-	need(m.Tools.Kubectl.Version != "", "tools.kubectl.version")
-	need(m.Tools.KubectlCNPG.Version != "", "tools.kubectl-cnpg.version")
-	need(len(m.Charts) > 0, "charts")
-	for name, c := range m.Charts {
-		need(c.Repository != "" && exactVersion.MatchString(c.Version), "charts."+name+" with repository and an exact version")
-		need(sha256Digest.MatchString(c.Digest), "charts."+name+".digest")
-		need(c.Name != "", "charts."+name+".name")
-	}
-	need(strings.Contains(m.Registry.Image, "@sha256:"), "registry.image with a digest")
-	need(strings.Contains(m.PostgreSQL.ImageName, "@sha256:"), "postgresql.imageName with a digest")
-	need(m.PostgreSQL.PostgresUID > 0 && m.PostgreSQL.PostgresGID > 0, "postgresql.postgresUID and postgresGID, both above 0")
 	return errors.Join(errs...)
 }
 
-// Pinned are the images the manifest pins by digest, each as
-// repository@digest with the repository in its full form, such as
-// docker.io/library/busybox. They are the images of every string such as
-// registry.example/name:tag@sha256:…, and of every image block of a chart's
-// values: a map with repository (after registry when there is one) and
-// either digest or a tag that ends in @sha256:…. k3s's own images are not
-// among them: k3s imports them from its airgap tarball.
-func (m *Manifest) Pinned() []string {
-	pinned := make([]string, 0, len(m.images))
-	for _, p := range m.images {
-		pinned = append(pinned, p.Repository+"@"+p.Digest)
-	}
-	slices.Sort(pinned)
-	return slices.Compact(pinned)
+// Pin is an image or chart: its repository in full, its tag or version,
+// and the image's digest.
+type Pin struct {
+	Repository, Tag, Digest string
 }
 
-// Images are the images of Pinned with their tags, each once.
-func (m *Manifest) Images() []Pin { return m.images }
-
-func (p Pin) String() string { return p.Repository + ":" + p.Tag + "@" + p.Digest }
-
-// chartImage is an image block of an upstream chart: its keys in the
-// manifest, and the field the chart reads its digest from: digest, or tag
-// for a chart without a digest field.
-type chartImage struct {
-	keys  []string
-	field string
-}
-
-// chartImages are the image blocks the upstream charts read. Each must be
-// there with its digest where its chart reads it: a chart without one runs
-// its own default image, by tag only.
-var chartImages = []chartImage{
-	{[]string{"cert-manager", "image"}, "digest"},
-	{[]string{"cert-manager", "webhook", "image"}, "digest"},
-	{[]string{"cert-manager", "cainjector", "image"}, "digest"},
-	{[]string{"cert-manager", "acmesolver", "image"}, "digest"},
-	{[]string{"cert-manager", "startupapicheck", "image"}, "digest"},
-	{[]string{"cloudnative-pg", "image"}, "tag"},
-	{[]string{"plugin-barman-cloud", "image"}, "tag"},
-	{[]string{"plugin-barman-cloud", "sidecarImage"}, "tag"},
-	{[]string{"agent", "image"}, "digest"},
-	{[]string{"cluster", "image"}, "digest"},
-}
-
-// pinnedIn says whether the manifest has the block, by its nested keys,
-// with a repository and a digest in its field.
-func (c chartImage) pinnedIn(manifest any) bool {
-	node := manifest
-	for _, k := range c.keys {
-		m, ok := node.(map[string]any)
-		if !ok {
-			return false
-		}
-		node = m[k]
-	}
-	block, ok := node.(map[string]any)
-	if !ok {
-		return false
-	}
-	if repo, ok := block["repository"].(string); !ok || repo == "" {
-		return false
-	}
-	value, ok := block[c.field].(string)
-	if !ok {
-		return false
-	}
-	if c.field == "tag" {
-		_, value, _ = strings.Cut(value, "@")
-	}
-	return strings.HasPrefix(value, "sha256:")
-}
-
-// images walks the manifest for its images: where it pins each, the paths
-// of the image blocks without a digest, and of those with a digest both in
-// digest and in tag, of which a chart reads only one. charts holds chart
-// repositories, not images, and k3s its airgap images by tag, which k3s
-// imports.
-type images struct {
-	sites                []site
-	unpinned, twoDigests []string
-}
-
-// site is where the manifest pins an image or a chart: the scalars of its
-// tag and of its digest. When one string holds both, both are that scalar,
-// and prefix is what comes before the tag in it, such as the repository and
-// its colon.
+// site is where the file pins an image or a chart: the scalars of its tag
+// and of its digest, the same one when a string holds both, after prefix.
 type site struct {
 	pin         Pin
 	tag, digest *yaml.Node
 	prefix      string
 }
 
-func (w *images) visit(n *yaml.Node, path string) {
-	switch n.Kind {
-	case yaml.DocumentNode:
-		for _, c := range n.Content {
-			w.visit(c, path)
-		}
-	case yaml.ScalarNode:
-		if name, digest, ok := strings.Cut(n.Value, "@"); ok && strings.HasPrefix(digest, "sha256:") {
-			t := tag(name)
-			w.sites = append(w.sites, site{
-				pin: Pin{Repository: Repository(name), Tag: t, Digest: digest},
-				tag: n, digest: n, prefix: strings.TrimSuffix(name, t),
-			})
-		}
-	case yaml.SequenceNode:
-		for i, c := range n.Content {
-			w.visit(c, fmt.Sprintf("%s[%d]", path, i))
-		}
-	case yaml.MappingNode:
-		fields := fields(n)
-		if repo := scalar(fields["repository"]); repo != "" {
-			if registry := scalar(fields["registry"]); registry != "" {
-				repo = registry + "/" + repo
+// imageSites walks the file for the images of the cluster: each string such
+// as repository:tag@sha256:…, and each block of a chart's values with a
+// repository, after registry when there is one, and a digest in digest or
+// after its tag's @. k3s's images go by tag, charts by version, and lab is
+// not the cluster. It returns the paths of the blocks without a digest too.
+func imageSites(doc *yaml.Node) (sites []site, unpinned []string) {
+	var visit func(n *yaml.Node, path string)
+	visit = func(n *yaml.Node, path string) {
+		switch n.Kind {
+		case yaml.DocumentNode, yaml.SequenceNode:
+			for _, c := range n.Content {
+				visit(c, path)
 			}
-			digestNode, tagNode := fields["digest"], fields["tag"]
-			digest := scalar(digestNode)
-			tag, inTag, _ := strings.Cut(scalar(tagNode), "@")
-			switch {
-			case digest != "" && inTag != "":
-				w.twoDigests = append(w.twoDigests, path)
-			case digest == "":
-				digest, digestNode = inTag, tagNode
+		case yaml.ScalarNode:
+			if name, digest, ok := strings.Cut(n.Value, "@"); ok && strings.HasPrefix(digest, "sha256:") {
+				t := tag(name)
+				sites = append(sites, site{
+					pin: Pin{Repository: Repository(name), Tag: t, Digest: digest},
+					tag: n, digest: n, prefix: strings.TrimSuffix(name, t),
+				})
 			}
-			if strings.HasPrefix(digest, "sha256:") {
-				w.sites = append(w.sites, site{pin: Pin{Repository: Repository(repo), Tag: tag, Digest: digest}, tag: tagNode, digest: digestNode})
-			} else {
-				w.unpinned = append(w.unpinned, path)
+		case yaml.MappingNode:
+			f := fields(n)
+			if repo := scalar(f["repository"]); repo != "" {
+				if registry := scalar(f["registry"]); registry != "" {
+					repo = registry + "/" + repo
+				}
+				digestNode := f["digest"]
+				tag, digest, _ := strings.Cut(scalar(f["tag"]), "@")
+				if digest == "" {
+					digest = scalar(digestNode)
+				} else {
+					digestNode = f["tag"]
+				}
+				if strings.HasPrefix(digest, "sha256:") {
+					sites = append(sites, site{pin: Pin{Repository: Repository(repo), Tag: tag, Digest: digest}, tag: f["tag"], digest: digestNode})
+				} else {
+					unpinned = append(unpinned, path)
+				}
 			}
-		}
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			k := n.Content[i].Value
-			// A tag with a digest belongs to the block above.
-			if k == "tag" || (path == "" && (k == "charts" || k == "k3s")) {
-				continue
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k := n.Content[i].Value
+				if k == "tag" || (path == "" && (k == "k3s" || k == "charts" || k == "lab")) {
+					continue
+				}
+				visit(n.Content[i+1], strings.TrimPrefix(path+"."+k, "."))
 			}
-			w.visit(n.Content[i+1], strings.TrimPrefix(path+"."+k, "."))
 		}
 	}
+	visit(doc, "")
+	return sites, unpinned
 }
 
-// scalar is the value of a scalar node, or "" for anything else.
 func scalar(n *yaml.Node) string {
 	if n == nil || n.Kind != yaml.ScalarNode {
 		return ""
@@ -332,7 +204,6 @@ func scalar(n *yaml.Node) string {
 	return n.Value
 }
 
-// fields are the values of a mapping node by their keys.
 func fields(n *yaml.Node) map[string]*yaml.Node {
 	f := map[string]*yaml.Node{}
 	for i := 0; i+1 < len(n.Content); i += 2 {
@@ -341,29 +212,9 @@ func fields(n *yaml.Node) map[string]*yaml.Node {
 	return f
 }
 
-// chartSites are where the manifest, a document Parse took, pins its
-// charts: the version and digest of each, as a Pin of its OCI repository
-// and name.
-func chartSites(doc *yaml.Node) ([]site, error) {
-	var sites []site
-	charts := fields(doc.Content[0])["charts"]
-	if charts == nil {
-		return nil, errors.New("charts is not a key of the file itself, such as one of a YAML merge")
-	}
-	for i := 1; i < len(charts.Content); i += 2 {
-		f := fields(charts.Content[i])
-		repo := strings.TrimPrefix(scalar(f["repository"]), "oci://") + "/" + scalar(f["name"])
-		sites = append(sites, site{
-			pin: Pin{Repository: repo, Tag: scalar(f["version"]), Digest: scalar(f["digest"])},
-			tag: f["version"], digest: f["digest"],
-		})
-	}
-	return sites, nil
-}
-
-// Update is the versions file data with each image and chart it pins moved
-// to the tag and digest that move gives for it, with the file's comments
-// and layout kept. It calls move once for each pin.
+// Update is the versions file with each image and chart moved to the Pin
+// move gives for it, with every comment and line kept. A chart's Pin has
+// its repository/name and its version as the tag. move runs once per pin.
 func Update(data []byte, move func(Pin) (Pin, error)) ([]byte, error) {
 	if _, err := Parse(data); err != nil {
 		return nil, err
@@ -372,15 +223,22 @@ func Update(data []byte, move func(Pin) (Pin, error)) ([]byte, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
 	}
-	var w images
-	w.visit(&doc, "")
-	charts, err := chartSites(&doc)
-	if err != nil {
-		return nil, err
+	if len(doc.Content) == 0 {
+		return nil, errors.New("an empty versions file")
+	}
+	sites, _ := imageSites(&doc)
+	charts := fields(doc.Content[0])["charts"]
+	if charts == nil {
+		return nil, errors.New("no charts")
+	}
+	for i := 1; i < len(charts.Content); i += 2 {
+		f := fields(charts.Content[i])
+		repo := strings.TrimPrefix(scalar(f["repository"]), "oci://") + "/" + scalar(f["name"])
+		sites = append(sites, site{pin: Pin{Repository: repo, Tag: scalar(f["version"])}, tag: f["version"]})
 	}
 	moved := map[Pin]Pin{}
 	var edits []edit
-	for _, s := range append(w.sites, charts...) {
+	for _, s := range sites {
 		to, ok := moved[s.pin]
 		if !ok {
 			var err error
@@ -394,9 +252,11 @@ func Update(data []byte, move func(Pin) (Pin, error)) ([]byte, error) {
 		case s.tag == s.digest:
 			edits = append(edits, edit{s.tag, s.prefix + to.Tag + "@" + to.Digest})
 		case to.Tag != s.pin.Tag && s.tag == nil:
-			return nil, fmt.Errorf("%s has no tag to move to %s", s.pin, to.Tag)
+			return nil, fmt.Errorf("%s has no tag to move to %s", s.pin.Repository, to.Tag)
 		default:
-			edits = append(edits, edit{s.digest, to.Digest})
+			if to.Digest != s.pin.Digest {
+				edits = append(edits, edit{s.digest, to.Digest})
+			}
 			if to.Tag != s.pin.Tag {
 				edits = append(edits, edit{s.tag, to.Tag})
 			}
@@ -450,12 +310,11 @@ func apply(data []byte, edits []edit) ([]byte, error) {
 	return []byte(strings.Join(lines, "")), nil
 }
 
-// Repository is the full form of an image name, with its tag cut off:
+// Repository is the full form of an image name without its tag, with
 // docker.io and library/ where the name leaves them out, as containerd
 // writes them.
 func Repository(name string) string {
-	// A tag is after the last colon, unless that colon is in the registry's
-	// host:port.
+	// A tag is after the last colon, unless that colon is in host:port.
 	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
 		name = name[:i]
 	}
@@ -472,7 +331,6 @@ func Repository(name string) string {
 	return name
 }
 
-// tag is the tag of an image name, or "" when it has none.
 func tag(name string) string {
 	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
 		return name[i+1:]
@@ -483,8 +341,8 @@ func tag(name string) string {
 // Reference is the full form of an image reference by tag, such as
 // docker.io/rancher/mirrored-pause:3.10.2.
 func Reference(ref string) string {
-	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
-		return Repository(ref) + ref[i:]
+	if t := tag(ref); t != "" {
+		return Repository(ref) + ":" + t
 	}
 	return Repository(ref)
 }

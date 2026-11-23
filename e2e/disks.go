@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -6,24 +6,16 @@ import (
 	"strconv"
 )
 
-// In the scenario data-disk-full, every node keeps its local-path volumes,
-// the instances' data and WAL, on a filesystem of fixed size, as a node's
-// data disk in production: a tmpfs of diskSize, mounted at k3s's storage
-// directory before the charts are deployed. The ballast fills it, not the
-// machine's disk. Every node gets one, since which node replica 1 runs on is
-// known only once the cluster runs. In every other scenario the volumes are
-// on a Docker volume (lab.go).
+// In data-disk-full each node keeps the instances' data on a tmpfs of
+// diskSize, as a data disk of production, which the ballast fills.
 const (
-	diskScenario = "data-disk-full"
-	diskSize     = 1 << 30
-	storageDir   = "/var/lib/rancher/k3s/storage"
+	diskSize = 1 << 30
 	// The ballast file, next to the local-path volumes.
 	ballastName = "e2e-ballast"
 )
 
-// dataDisks mounts the data filesystem of every node. The storage directory
-// is still empty: the cache has no charts.
-func (l *lab) dataDisks(ctx context.Context) error {
+// dataDisks: "the data disks are mounted", before the charts.
+func dataDisks(ctx context.Context, _ *scenario, _ args) error {
 	for i := range nodeCount {
 		_, err := command(ctx, "docker", "exec", nodeName(i), "mount", "-t", "tmpfs",
 			"-o", fmt.Sprintf("size=%d,mode=0700", diskSize), "e2e-data", storageDir)
@@ -31,7 +23,6 @@ func (l *lab) dataDisks(ctx context.Context) error {
 			return err
 		}
 	}
-	logf("every node has a data filesystem of %s", gib(diskSize))
 	return nil
 }
 

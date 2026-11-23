@@ -1,25 +1,25 @@
-# The release otel-cluster, on top of otel.yaml: one collector for the
-# cluster's own services.
-fullnameOverride: otel-cluster
-mode: deployment
-replicaCount: 1
-clusterRole:
-  create: true
-  rules:
-    - apiGroups: [""]
-      resources: [pods]
-      verbs: [get, list, watch]
-alternateConfig:
-  receivers:
-    prometheus:
-      config:
-        scrape_configs:
-          # cert-manager names each Certificate by its own namespace and name.
-          - job_name: cert-manager
-            scrape_interval: 15s
-            honor_labels: true
-            kubernetes_sd_configs:
-              - role: pod
-                namespaces: {names: [cert-manager]}
-            relabel_configs:
-              - {source_labels: [__meta_kubernetes_pod_container_port_number], regex: "9402", action: keep}
+# The release otel-cluster: one collector for the cluster's own services.
+opentelemetry-collector-chart:
+  fullnameOverride: otel-cluster
+  mode: deployment
+  replicaCount: 1
+  clusterRole:
+    create: true
+    rules:
+      - apiGroups: [""]
+        resources: [pods]
+        verbs: [get, list, watch]
+  alternateConfig:
+    receivers:
+      prometheus:
+        config:
+          scrape_configs:
+            # cert-manager names each Certificate by its own namespace and name.
+            - job_name: cert-manager
+              scrape_interval: 15s
+              honor_labels: true
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces: {names: [cert-manager]}
+              relabel_configs:
+                - {source_labels: [__meta_kubernetes_pod_container_port_number], regex: "9402", action: keep}

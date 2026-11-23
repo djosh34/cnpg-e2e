@@ -1,92 +1,83 @@
 name: e2e
 
-# Runs scenarios, each in its own job, in parallel: every scenario on each
-# pull request, nightly, and by hand those that scenarios picks by name,
-# where empty picks every scenario. The scenarios are airgap, install, install-kvm,
-# k3s-upgrade, k3s-upgrade-kvm, restore and each scenario of e2e/features.
-# airgap checks the nodes, the controller and the fill, install installs k3s
-# and every chart of helm/ on empty nodes with ansible/install.yml, and
-# k3s-upgrade installs the k3s release before, then upgrades it with
-# ansible/upgrade.yml. install-kvm and k3s-upgrade-kvm do the same on three
-# VMs with SELinux enforcing, under the runner's KVM. Every other scenario
-# starts a clean k3s cluster from the cache and deploys the charts with
-# ansible/upgrade.yml: restore checks just that, and each scenario of
-# e2e/features then runs its lines and always.feature. The image upgrade
-# among them starts from the versions file of a release, or of main's
-# history, so its job checks out the whole history. First, the images job
-# publishes the images of e2e/images that the packages do not have yet. The
-# cache job builds and publishes the cache when the packages do not have
-# it; only the scenarios that start from it wait for it. Each scenario job
-# uploads the run's files, also when its scenario failed.
-#
-# The nightly, or a run by hand with nightly on, first copies the newest
-# images and charts of Docker Hardened Images into this repo's packages
-# with cmd/mirror -latest, and every scenario runs on the versions file it
-# writes. Then it publishes a release of two files, also when scenarios
-# failed: that versions file and report.yaml, the result of each scenario.
+# Every scenario in its own job, on pull requests, nightly and by hand. A
+# push to main saves the cache of its commit. The nightly first copies the
+# newest images and charts with cmd/mirror -latest, runs every scenario on
+# that versions file, and releases it with report.yaml.
 on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 3 * * *"
   workflow_dispatch:
     inputs:
       scenarios:
-        description: Scenario names, separated by commas; empty for every scenario
+        description: Scenario names, separated by spaces; empty for every scenario
         type: string
         default: ""
       nightly:
-        description: Run as the nightly, with every scenario
+        description: Run as the nightly
         type: boolean
         default: false
-  schedule:
-    - cron: "23 3 * * *"
-  pull_request:
 
-run-name: >-
-  ${{ (github.event_name == 'schedule' || inputs.nightly) && 'nightly'
-  || format('e2e{0}', inputs.scenarios && format(' of {0}', inputs.scenarios) || '') }}
+run-name: ${{ (github.event_name == 'schedule' || inputs.nightly) && 'nightly' || github.event_name == 'push' && 'cache' || 'e2e' }}
 
 permissions:
   contents: read
 
-# A new push to a pull request cancels the run of the one before.
 concurrency:
   group: e2e-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
-  plan:
-    name: Pick the scenarios
+  cache:
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
-    outputs:
-      fresh: ${{ steps.pick.outputs.fresh }}
-      cached: ${{ steps.pick.outputs.cached }}
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - id: pick
-        env:
-          WANTED: ${{ !inputs.nightly && inputs.scenarios || '' }}
-        run: |
-          set -euo pipefail
-          picked=$(tr -s ', ' '\n' <<<"$WANTED" | sed '/^$/d' | sort -u)
-          if [[ -z $picked ]]; then
-            picked=$({
-              printf '%s\n' airgap install install-kvm k3s-upgrade k3s-upgrade-kvm restore
-              grep -ho '^ *@[a-z0-9-]*' e2e/features/*.feature | tr -d ' @' | grep -vx always
-            } | sort -u)
-          fi
-          # Those that start from new machines; every other one starts from
-          # the cache.
-          new='airgap|install|install-kvm|k3s-upgrade|k3s-upgrade-kvm'
-          json() { jq -Rnc '[inputs | select(length > 0)]'; }
-          fresh=$({ grep -xE "$new" <<<"$picked" || true; } | json)
-          cached=$({ grep -vxE "$new" <<<"$picked" || true; } | json)
-          echo "From new machines: $fresh; from the cache: $cached"
-          echo "fresh=$fresh" >>"$GITHUB_OUTPUT"
-          echo "cached=$cached" >>"$GITHUB_OUTPUT"
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - env:
+          TOKEN: ${{ github.token }}
+        run: docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
+      - run: go run ./e2e -push install
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: install
+          path: results/
+          if-no-files-found: error
 
-  # The nightly's versions file, for the scenario jobs and the release.
+  plan:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    outputs:
+      scenarios: ${{ steps.list.outputs.scenarios }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - id: list
+        env:
+          SCENARIOS: ${{ !inputs.nightly && inputs.scenarios || '' }}
+        # Unquoted, so each name is an argument; an unknown one fails.
+        run: |
+          scenarios=$(go run ./e2e list $SCENARIOS)
+          echo "scenarios=$scenarios" >>"$GITHUB_OUTPUT"
+
   mirror:
-    name: Copy the newest images and charts
     if: github.event_name == 'schedule' || inputs.nightly
     runs-on: ubuntu-24.04
     permissions:
@@ -98,10 +89,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: e2e/go.mod
-          cache-dependency-path: e2e/go.sum
-      - name: Copy
-        env:
+          go-version-file: go.mod
+      - env:
           DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
           DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
           TOKEN: ${{ github.token }}
@@ -109,96 +98,41 @@ jobs:
           set -euo pipefail
           docker login dhi.io --username "$DHI_USERNAME" --password-stdin <<<"$DHI_TOKEN"
           docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
-          go -C e2e run ./cmd/mirror -latest ../versions/versions.yaml
+          go run ./cmd/mirror -latest
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: versions
           path: versions/versions.yaml
           if-no-files-found: error
 
-  # A pull request from a fork has no right to push packages, so it skips
-  # images and cache, and its scenario jobs build what the packages lack.
-  images:
-    name: Publish the images
-    if: ${{ !github.event.pull_request.head.repo.fork }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: e2e/go.mod
-          cache-dependency-path: e2e/go.sum
-      - name: Build and push the missing images
-        env:
-          TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
-          go -C e2e run ./cmd/images
-
-  # One cache publisher at a time, across branches: the others wait in
-  # turn, then find the cache the first pushed under the same tag.
-  cache:
-    name: Publish the cache
-    needs: [plan, images]
-    if: ${{ !failure() && !cancelled() && needs.plan.outputs.cached != '[]' && !github.event.pull_request.head.repo.fork }}
-    concurrency:
-      group: e2e-cache
-      queue: max
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: e2e/go.mod
-          cache-dependency-path: e2e/go.sum
-      - name: Log in to ghcr.io
-        env:
-          TOKEN: ${{ github.token }}
-        run: docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
-      - name: Build and push the cache when it is missing
-        run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 50m -v . -scenario cache -push
-
-  # The scenario jobs also run when mirror was skipped, outside the nightly.
-  fresh:
+  scenario:
     name: ${{ matrix.scenario }}
-    needs: [plan, images, mirror]
-    if: ${{ !failure() && !cancelled() && needs.plan.outputs.fresh != '[]' }}
+    needs: [plan, mirror]
+    # Also when mirror was skipped, outside the nightly.
+    if: ${{ !failure() && !cancelled() && needs.plan.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
-        scenario: ${{ fromJSON(needs.plan.outputs.fresh) }}
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # For the merge base with main and main's versions file.
+          fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: e2e/go.mod
-          cache-dependency-path: e2e/go.sum
-      - name: The versions file of the nightly
-        if: needs.mirror.result == 'success'
+          go-version-file: go.mod
+      - if: needs.mirror.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: versions
           path: versions
-      - name: Scenario
-        env:
+      - env:
           SCENARIO: ${{ matrix.scenario }}
-        run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO"
+        run: go run ./e2e "$SCENARIO"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
@@ -206,90 +140,31 @@ jobs:
           path: results/
           if-no-files-found: error
 
-  # These pull the cache the cache job published: -no-build. Without the
-  # cache job, on a fork, each builds the cache when it is missing.
-  cached:
-    name: ${{ matrix.scenario }}
-    needs: [plan, cache, mirror]
-    if: ${{ !failure() && !cancelled() && needs.plan.outputs.cached != '[]' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        scenario: ${{ fromJSON(needs.plan.outputs.cached) }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 100
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: ${{ matrix.scenario == 'image-upgrade' && '0' || '1' }}
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: e2e/go.mod
-          cache-dependency-path: e2e/go.sum
-      - name: The versions file of the nightly
-        if: needs.mirror.result == 'success'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: versions
-          path: versions
-      - name: Scenario
-        env:
-          SCENARIO: ${{ matrix.scenario }}
-          # For the image upgrade's list of releases.
-          GITHUB_TOKEN: ${{ matrix.scenario == 'image-upgrade' && github.token || '' }}
-          CACHE: ${{ needs.cache.result }}
-          MIRROR: ${{ needs.mirror.result }}
-        run: |
-          set -euo pipefail
-          flags=()
-          if [[ $CACHE == success ]]; then flags+=(-no-build); fi
-          # The nightly's image upgrade starts from last night's release.
-          if [[ $MIRROR == success ]]; then flags+=(-nightly); fi
-          go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO" "${flags[@]}"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() }}
-        with:
-          name: ${{ matrix.scenario }}
-          path: results/
-          if-no-files-found: error
-
-  # The nightly's release, also when scenarios failed. A scenario that did
-  # not run, because a job before it failed, is skipped in the report.
+  # Also when scenarios failed.
   release:
-    name: Release
-    needs: [plan, mirror, fresh, cached]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.mirror.result == 'success' }}
+    needs: [mirror, scenario]
+    if: ${{ !cancelled() && needs.mirror.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-      actions: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: versions
-      - name: Report and release
-        env:
+          path: results
+          merge-multiple: true
+      - env:
           GH_TOKEN: ${{ github.token }}
-          FRESH: ${{ needs.plan.outputs.fresh }}
-          CACHED: ${{ needs.plan.outputs.cached }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" \
-            --jq '.jobs[] | {name, conclusion, html_url}' | jq -s . >jobs.json
-          jq -r --argjson fresh "$FRESH" --argjson cached "$CACHED" --arg commit "$GITHUB_SHA" --arg run "$RUN" '
-            (map({(.name): .}) | add // {}) as $jobs
-            | "commit: \($commit)", "run: \($run)", "scenarios:",
-              (($fresh + $cached | sort)[] | $jobs[.] as $job
-                | "  - name: \(.)",
-                  "    result: \(if $job.conclusion == "success" then "passed"
-                    elif $job == null or $job.conclusion == "skipped" then "skipped" else "failed" end)",
-                  (if $job then "    job: \($job.html_url)" else empty end))
-          ' jobs.json >report.yaml
+          go run ./e2e report >report.yaml
           cat report.yaml
-          passed=$(grep -c '^    result: passed$' report.yaml || true)
-          total=$(grep -c '^  - name: ' report.yaml)
-          gh release create "nightly-$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" versions.yaml report.yaml \
+          gh release create "nightly-$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" results/versions.yaml report.yaml \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
-            --title "Nightly $(date -u +%F)" --notes "$passed of $total scenarios passed on $GITHUB_SHA."
+            --title "Nightly $(date -u +%F)" --notes "The e2e of $GITHUB_SHA: $RUN"

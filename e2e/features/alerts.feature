@@ -8,9 +8,6 @@ Feature: One scenario per alert
   scenario: a cluster takes about 5 hours of transactions to pass its
   threshold of 1 billion.
 
-  Background:
-    Given the cluster is healthy
-
   @database-down
   Scenario: CNPGDatabaseDown: two of three nodes are lost for 5 minutes
     One etcd member of three leaves no Kubernetes API, so nothing is
@@ -23,6 +20,7 @@ Feature: One scenario per alert
     before it streams from the primary, with the age of its last replayed
     transaction as its lag, so CNPGReplicaLag can fire for it.
 
+    Given a running cluster
     When the primary's node and replica 1's node are killed
     Then CNPGDatabaseDown critical fires for the cluster < 420 s after the kill
     And Alertmanager sends CNPGDatabaseDown critical for the cluster < 60 s
@@ -30,7 +28,7 @@ Feature: One scenario per alert
     And the nodes start
     Then CNPGDatabaseDown resolves for the cluster < 300 s
     And Alertmanager sends the resolved CNPGDatabaseDown critical for the cluster < 360 s
-    And the cluster is healthy < 600 s
+    And the cluster is healthy
     And CNPGReplicaLag may fire for replica 2
     And CNPGReplicaDown may fire for the primary
     And CNPGReplicaDown may fire for replica 1
@@ -43,12 +41,13 @@ Feature: One scenario per alert
 
   @replica-down
   Scenario: CNPGReplicaDown: a replica's node is lost for over 5 minutes
+    Given a running cluster
     When replica 1's node is killed
     Then CNPGReplicaDown critical fires for replica 1 < 420 s after the kill
     And Alertmanager sends CNPGReplicaDown critical for replica 1 < 60 s
     And the primary is still primary
     When the node starts
-    Then the cluster is healthy < 600 s
+    Then the cluster is healthy
     And CNPGReplicaDown resolves for replica 1 < 120 s
     And Alertmanager sends the resolved CNPGReplicaDown critical for replica 1 < 360 s
 
@@ -56,6 +55,7 @@ Feature: One scenario per alert
   Scenario: CNPGReplicaLag: replay pauses on a replica while the client writes
     Replica 2 confirms the commits, so writes go on.
 
+    Given a running cluster
     When replay on replica 1 is paused
     Then CNPGReplicaLag critical fires for replica 1 < 300 s
     And Alertmanager sends CNPGReplicaLag critical for replica 1 < 60 s
@@ -70,13 +70,14 @@ Feature: One scenario per alert
     written first, so the table the commit inserts into exists before the
     pause.
 
+    Given a running cluster
     When a row is written
     And replay on replica 1 and replica 2 is paused
     And a commit is started on the primary
     Then CNPGWritesBlocked critical fires for the primary < 120 s
     And Alertmanager sends CNPGWritesBlocked critical for the primary < 60 s
     When replay on replica 1 and replica 2 is resumed
-    Then the commit is done < 60 s
+    Then the commit is done
     And CNPGWritesBlocked resolves for the primary < 120 s
     And Alertmanager sends the resolved CNPGWritesBlocked critical for the primary < 360 s
 
@@ -85,24 +86,30 @@ Feature: One scenario per alert
     A stopped store refuses connections, so each archive call fails at once.
     The primary keeps its WAL until the store is back.
 
+    Given a running cluster
     When the store is stopped
     And a row is written
     And the primary's WAL is switched
-    Then the primary's WAL is waiting for the store < 60 s
+    Then the primary's WAL is waiting for the store
     And CNPGBackupFailing critical fires for the cluster < 780 s
     And Alertmanager sends CNPGBackupFailing critical for the cluster < 60 s
     When the store starts
-    Then the primary's WAL is archived < 180 s
+    Then the primary's WAL is archived
     And CNPGBackupFailing resolves for the cluster < 120 s
     And Alertmanager sends the resolved CNPGBackupFailing critical for the cluster < 360 s
 
   @data-disk-full
   Scenario: CNPGDataDiskFull: a ballast file fills a node's data disk
-    Each node keeps its data on a filesystem of its own, which the kubelet
-    reports about once a minute. While the critical alert fires,
-    Alertmanager mutes the warning, so the disk is filled to 75 % first,
-    then to 82 %. DataVolumeFull fires for the same disk.
+    Each node keeps its data on a filesystem of 1 GiB of its own, mounted
+    before the charts, which the kubelet reports about once a minute. While
+    the critical alert fires, Alertmanager mutes the warning, so the disk is
+    filled to 75 % first, then to 82 %. DataVolumeFull fires for the same
+    disk.
 
+    Given empty nodes
+    And the data disks are mounted
+    When the versions file is installed
+    Then the cluster is healthy
     When replica 1's data disk is filled to 75 %
     Then CNPGDataDiskFull warning fires for replica 1 < 480 s
     And Alertmanager sends CNPGDataDiskFull warning for replica 1 < 60 s
@@ -124,6 +131,7 @@ Feature: One scenario per alert
     in Alertmanager. Then both get the role's 90 days again.
     CertManagerCertificateExpiring fires for the same certificates.
 
+    Given a running cluster
     When the server certificate is reissued for 7 days
     And the replication certificate is reissued for 2 days
     Then CNPGCertificateExpiring warning fires for the server certificate < 1200 s
@@ -147,6 +155,7 @@ Feature: One scenario per alert
     lookback when no stale marker reaches it, so the alert may take that long
     to resolve.
 
+    Given a running cluster
     When sessions are held on replica 1 up to 93 % of max_connections
     Then CNPGConnectionsHigh critical fires for replica 1 < 480 s
     And Alertmanager sends CNPGConnectionsHigh critical for replica 1 < 60 s
@@ -156,11 +165,12 @@ Feature: One scenario per alert
 
   @compliance-violation
   Scenario: CNPGComplianceViolation: a role the compliance check does not expect
+    Given a running cluster
     When an unapproved role is created on the primary
     Then CNPGComplianceViolation critical fires for the cluster < 180 s
     And Alertmanager sends CNPGComplianceViolation critical for the cluster < 60 s
     When the unapproved role is dropped
-    Then compliance is healthy < 120 s
+    Then compliance is healthy
     And CNPGComplianceViolation resolves for the cluster < 120 s
     And Alertmanager sends the resolved CNPGComplianceViolation critical for the cluster < 360 s
 
@@ -169,6 +179,7 @@ Feature: One scenario per alert
     The revoke replicates, so the compliance query fails on every instance,
     while each exporter answers with its other metrics.
 
+    Given a running cluster
     When the exporter's grants are revoked on the primary
     Then CNPGMetricsMissing critical fires for the primary < 900 s
     And CNPGMetricsMissing critical fires for replica 1 < 60 s
@@ -177,7 +188,7 @@ Feature: One scenario per alert
     And Alertmanager sends CNPGMetricsMissing critical for replica 1 < 60 s
     And Alertmanager sends CNPGMetricsMissing critical for replica 2 < 60 s
     When the exporter's grants are given back on the primary
-    Then compliance is healthy < 120 s
+    Then compliance is healthy
     And CNPGMetricsMissing resolves for the primary < 120 s
     And CNPGMetricsMissing resolves for replica 1 < 120 s
     And CNPGMetricsMissing resolves for replica 2 < 120 s

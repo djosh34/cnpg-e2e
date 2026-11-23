@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"io"
 	"maps"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,13 +14,13 @@ import (
 
 	"github.com/cucumber/godog"
 	messages "github.com/cucumber/messages/go/v34"
+	"github.com/djosh34/cnpg-e2e/e2e/versions"
 )
 
-// The line shapes. Most lines are "<thing> is <word>": the step cuts the line
-// into thing, word and limit, and looks them up in the vocabulary
-// (vocab.go), which says what the e2e test does. The limits are in the feature
-// files.
+// The line shapes. Most lines are "<thing> is <word>": the step looks up
+// thing and word in the vocabulary (vocab.go), which says what to do.
 //
+//	empty nodes | empty VMs | a running cluster
 //	<thing> is|are <word> [< N s [after the <event>] | for N s]
 //	<thing> has|have been <word> since the <event>
 //	<thing> starts|stops
@@ -30,14 +29,12 @@ import (
 //	Alertmanager gets|sends|mutes [the resolved] <ALERT> [<severity>] for <who> [< N s [after the <event>]]
 //	no writes
 //
-// "< N s" counts from the line above, "< N s after the <event>" from that
-// event, "for N s" watches the state for the next N s, and "since the
-// <event>" checks the whole time from that event to now. A measure such as
-// "writing is healthy" takes "< N s" as its limit over the whole scenario,
-// and "< N s after the <event>" as the time by which it is back after that
-// event.
+// A check waits up to "< N s" from the line above or after the event, or
+// else up to its word's own limit. "for N s" watches it for N s, and
+// "since the <event>" checks the whole time from the event.
 const (
 	within    = ` < (\d+) s(?: after the (\w+))?`
+	setupLine = `^(empty nodes|empty VMs|a running cluster)$`
 	isLine    = `^(.+?) (?:is|are) (.+?)(?:` + within + `| for (\d+) s)?$`
 	sinceLine = `^(.+?) (?:has|have) been (.+) since the (\w+)$`
 	verbLine  = `^(.+?) (starts?|stops)$`
@@ -51,6 +48,7 @@ func (s *scenario) bind(sc *godog.ScenarioContext) {
 	sc.StepContext().Before(s.beforeStep)
 	sc.StepContext().After(s.afterStep)
 
+	sc.Step(setupLine, s.setup)
 	sc.Step(isLine, s.is)
 	sc.Step(sinceLine, s.since)
 	sc.Step(verbLine, s.verb)
@@ -63,18 +61,24 @@ func (s *scenario) bind(sc *godog.ScenarioContext) {
 // scenario is the state of the run's one scenario.
 type scenario struct {
 	ctx     context.Context
-	w       *world
+	name    string
+	m       *versions.Manifest // the run's versions file
+	data    []byte             // and its content
+	before  *versions.Manifest // main's, which the upgrade installs first
 	results *results
-	fault   error    // tearDown could not keep the run's files
-	images  []string // the images the image checks saw on the nodes, for images.txt with those at the end
+	lab     *lab
+	cache   string // whether the cluster started from the cache, or why not
+	up      bool   // the cluster and its database are up
+	failure error  // why the scenario failed
+	fault   error  // why tearDown could not keep the run's files
 
 	kind  messages.PickleStepType // Given, When or Then of the line running
-	roles map[string]string       // the instances by role: the primary, replica 1, ...
+	roles map[string]string       // the instances by role, from the first line that names one
 	marks map[string]time.Time    // when each named event happened
 	last  string                  // the last named event
 
 	clientRan   bool      // the client was started
-	clientEnded time.Time // when the e2e test stopped it
+	clientEnded time.Time // when it was stopped
 	writes      bool      // false after "Given no writes"
 
 	// The outages in place, which endOutages ends after a failed line.
@@ -87,21 +91,15 @@ type scenario struct {
 	switched map[string]string // the WAL file each instance switched away from last
 	restarts map[string]int    // the restart count of an instance's postgres container before it was killed
 	ident    string            // the pg_ident lines every instance had at the first line about them
-	store    string            // how the store is broken: stopped, paused, or "" when it is not
+	store    string            // how the store is broken: stopped, paused, or ""
 	commit   *background       // the commit "a commit is started" started
-	ballast  string            // the node whose data disk has the ballast file, until it is removed
-	held     *held             // the sessions held on an instance, until they are ended
+	ballast  string            // the node whose data disk has the ballast file
+	held     *held             // the sessions held on an instance
 
-	releasesBefore, releasesAfter map[string]release // the Helm releases before and after the image upgrade
-	primaryBefore                 string             // the primary and its pod's UID before the image upgrade
-
-	started time.Time       // when the scenario started, after the monitoring was ready
-	alerts  map[string]bool // the alerts the scenario names, "<alertname> <pod>": true when they must fire, false when they may
-
-	limits        map[string]int // the scenario's own limits of the measures
-	alwaysWriting int            // the limit always.feature gives writing
-	primaryOut    bool           // the primary changed or stopped in the scenario
-	inAlways      bool           // always.feature runs
+	started    time.Time       // when the cluster was up
+	alerts     map[string]bool // the alerts the scenario names, "<alertname> <pod>": true when they must fire, false when they may
+	writeLimit int             // the limit of writing the scenario set
+	primaryOut bool            // the primary changed or stopped
 
 	stepStart time.Time
 	holding   time.Time // when the "for N s" line running started
@@ -114,37 +112,32 @@ type row struct {
 	line, result, took, after, detail string
 }
 
-// beforeStep starts the client at the first event, with its writes unless
-// the scenario said "Given no writes".
+// beforeStep starts the client at the first When or Then line once the
+// cluster is up, with its writes unless the scenario said "Given no writes".
 func (s *scenario) beforeStep(ctx context.Context, st *godog.Step) (context.Context, error) {
 	s.kind, s.stepStart, s.detail = st.Type, time.Now(), ""
 	logf("%s %s", keyword(st.Type), st.Text)
-	if st.Type == messages.PickleStepType_ACTION && !s.clientRan {
-		if s.w == nil {
-			return ctx, errors.New("the cluster did not start")
-		}
+	if st.Type != messages.PickleStepType_CONTEXT && s.up && !s.clientRan && s.failure == nil {
 		logf("starting the client, writes %t", s.writes)
-		s.clientRan = true
-		if err := s.w.startClient(ctx, s.writes); err != nil {
+		if err := s.startClient(ctx); err != nil {
 			return ctx, fmt.Errorf("the client: %w", err)
 		}
+		s.clientRan = true
 	}
 	return ctx, nil
 }
 
-// afterStep prints how the line went and adds it to the timing table, with
-// its time after the last named event.
+// afterStep adds the line to the timing table, with its time after the
+// last named event.
 func (s *scenario) afterStep(ctx context.Context, st *godog.Step, status godog.StepResultStatus, err error) (context.Context, error) {
-	r := row{
-		line:   keyword(st.Type) + " " + st.Text,
-		result: status.String(),
-		took:   seconds(time.Since(s.stepStart)),
-		detail: s.detail,
-	}
+	r := row{line: keyword(st.Type) + " " + st.Text, result: status.String(), took: seconds(time.Since(s.stepStart)), detail: s.detail}
 	if s.last != "" {
 		r.after = seconds(time.Since(s.marks[s.last])) + " after the " + s.last
 	}
 	s.rows = append(s.rows, r)
+	if err != nil && s.failure == nil {
+		s.failure = err
+	}
 	switch {
 	case err != nil:
 		logf("  %s in %s: %v", r.result, r.took, err)
@@ -170,7 +163,20 @@ func keyword(t messages.PickleStepType) string {
 
 func seconds(d time.Duration) string { return fmt.Sprintf("%.1f s", d.Seconds()) }
 
-// is: "<thing> is <word>", with "< N s", "< N s after the <event>" or "for N s".
+// setup: what a scenario starts from, its first line.
+func (s *scenario) setup(from string) error {
+	switch {
+	case s.kind != messages.PickleStepType_CONTEXT || s.lab != nil:
+		return fmt.Errorf("%s must be the first line, a Given", from)
+	case from == "a running cluster":
+		return s.runningCluster()
+	default:
+		return s.emptyMachines(from == "empty VMs")
+	}
+}
+
+// is: "<thing> is <word>", with "< N s", "< N s after the <event>" or
+// "for N s".
 func (s *scenario) is(thing, word, n, after, forN string) error {
 	key, a, err := s.lookup(thing, word)
 	if err != nil {
@@ -188,19 +194,21 @@ func (s *scenario) is(thing, word, n, after, forN string) error {
 	case s.kind == messages.PickleStepType_ACTION:
 		return fmt.Errorf("a check in a When line: %s", key)
 	case w.longest != nil && after != "":
-		return s.measureBack(key, w, n, after)
+		return s.measureBack(w, n, after)
 	case w.longest != nil:
-		return s.measure(key, w, n, after, forN)
+		return s.measure(key, w, n, forN)
 	}
 	check := func(ctx context.Context) error { return w.state(ctx, s, a) }
 	if forN != "" {
 		return s.holdsFor(forN, check)
 	}
+	if n == "" && w.limit > 0 {
+		n = strconv.Itoa(w.limit)
+	}
 	return s.within(n, after, check)
 }
 
-// since: "<thing> has been <word> since the <event>", a check of the whole
-// time from that event to now.
+// since: "<thing> has been <word> since the <event>".
 func (s *scenario) since(thing, word, event string) error {
 	key, a, err := s.lookup(thing, word)
 	if err != nil {
@@ -222,9 +230,8 @@ func (s *scenario) since(thing, word, event string) error {
 
 // alert: "<ALERT> fires for <who> < N s" and the other alert words. fires
 // and resolves wait up to N s, or check now; fired and has not fired check
-// the whole scenario. fired and fires name an alert that must fire, may fire
-// one that may; always.feature's "the alerts are healthy" fails on any
-// other. A severity limits the check to the alert of that severity.
+// the whole scenario. always.feature's "the alerts are healthy" fails on an
+// alert the scenario does not say fired, fires or may fire.
 func (s *scenario) alert(name, severity, verb, who, n, after string) error {
 	if s.kind == messages.PickleStepType_ACTION {
 		return errors.New("an alert check in a When line")
@@ -258,10 +265,8 @@ func (s *scenario) alert(name, severity, verb, who, n, after string) error {
 	return s.within(n, after, check)
 }
 
-// alertLabels are the labels of the alert a line names. who is an instance
-// by its role, with its pod; "the cluster", an alert of the whole cluster,
-// with the cluster and no pod; or "the server certificate" or "the
-// replication certificate", with the Certificate's name and no pod.
+// alertLabels are the labels of the alert a line names: of an instance by
+// its role, of the cluster, or of the server or replication certificate.
 func (s *scenario) alertLabels(name, severity, who string) (map[string]string, error) {
 	labels := map[string]string{"alertname": name, "pod": ""}
 	if severity != "" {
@@ -289,32 +294,30 @@ func (s *scenario) alertLabels(name, severity, who string) (map[string]string, e
 // alertIs checks that an alert with the labels fires now, or fired in the
 // scenario, or not.
 func (s *scenario) alertIs(labels map[string]string, want, inScenario bool) func(context.Context) error {
+	mon := s.lab.mon
 	return func(ctx context.Context) error {
 		var from time.Time
 		what := "fires"
 		if inScenario {
 			from, what = s.started, "fired in the scenario"
 		}
-		got, err := s.w.mon.alertFires(ctx, labels, from)
-		if err != nil {
+		got, err := mon.alertFires(ctx, labels, from)
+		if err != nil || got == want {
 			return err
 		}
-		if got != want {
-			all, err := s.w.mon.firing(ctx)
-			if inScenario {
-				all, err = s.w.mon.fired(ctx, s.started)
-			}
-			return errors.Join(fmt.Errorf("%s %s: %t; the alerts: %s", selector(labels), what, got,
-				strings.Join(slices.Sorted(maps.Keys(all)), ", ")), err)
+		all, err := mon.firing(ctx)
+		if inScenario {
+			all, err = mon.fired(ctx, s.started)
 		}
-		return nil
+		return errors.Join(fmt.Errorf("%s %s: %t; the alerts: %s", selector(labels), what, got,
+			strings.Join(slices.Sorted(maps.Keys(all)), ", ")), err)
 	}
 }
 
 // alertmanager: "Alertmanager gets <ALERT> for <role>" sends Alertmanager
 // that alert as the rule evaluator would; "sends" waits until the receiver
-// got it as firing, or "sends the resolved" as resolved, and "mutes" until
-// Alertmanager holds it suppressed.
+// got it, firing or resolved, and "mutes" until Alertmanager holds it
+// suppressed.
 func (s *scenario) alertmanager(verb, resolved, name, severity, who, n, after string) error {
 	labels, err := s.alertLabels(name, severity, who)
 	if err != nil {
@@ -323,11 +326,12 @@ func (s *scenario) alertmanager(verb, resolved, name, severity, who, n, after st
 	if resolved != "" && verb != "sends" {
 		return errors.New("only sends takes the resolved")
 	}
+	mon := s.lab.mon
 	if verb == "gets" {
 		if s.kind == messages.PickleStepType_OUTCOME || n != "" || severity != "" || labels["pod"] == "" {
 			return errors.New("gets: an event of one instance, with no limit and no severity")
 		}
-		return s.w.mon.amSend(s.ctx, name, labels["pod"])
+		return mon.amSend(s.ctx, name, labels["pod"])
 	}
 	if s.kind == messages.PickleStepType_ACTION {
 		return errors.New("an Alertmanager check in a When line")
@@ -336,10 +340,10 @@ func (s *scenario) alertmanager(verb, resolved, name, severity, who, n, after st
 	if resolved != "" {
 		status = "resolved"
 	}
-	check := func(ctx context.Context) error { return s.w.mon.sent(labels, status, s.started) }
+	check := func(ctx context.Context) error { return mon.sent(labels, status, s.started) }
 	if verb == "mutes" {
 		check = func(ctx context.Context) error {
-			state, err := s.w.mon.amState(ctx, labels)
+			state, err := mon.amState(ctx, labels)
 			if err == nil && state != "suppressed" {
 				err = fmt.Errorf("the state of %s in Alertmanager: %q", selector(labels), state)
 			}
@@ -369,18 +373,17 @@ func (s *scenario) pass(n, after string) error {
 	}
 }
 
-// noWrites: "Given no writes", the only scenarios whose client never writes.
+// noWrites: "Given no writes": the client only reads.
 func (s *scenario) noWrites() error {
 	if s.clientRan {
-		return errors.New("no writes must come before the first event")
+		return errors.New("no writes must come before the first When")
 	}
 	s.writes = false
 	return nil
 }
 
-// event does an event. Its time, for "after the <event>" and "since the
-// <event>", is when the e2e test has done it: a kill, for one, first looks up
-// the nodes.
+// event does an event and marks its time, for "after the <event>" and
+// "since the <event>": when it is done.
 func (s *scenario) event(key string, w word, a args) error {
 	if s.kind == messages.PickleStepType_OUTCOME {
 		return fmt.Errorf("an event in a Then line: %s", key)
@@ -394,34 +397,36 @@ func (s *scenario) event(key string, w word, a args) error {
 	return nil
 }
 
-// measure checks a measure over the whole scenario against the line's
-// limit. For writing, a scenario's own line sets the limit that
-// always.feature then uses; every other limit of always.feature holds for
-// every scenario. Where the primary changed or stopped, reading takes the
-// limit of writing: the scenario's own, else that of always.feature.
-func (s *scenario) measure(key string, w word, n, after, forN string) error {
-	if n == "" || after != "" || forN != "" {
+// measure checks the longest time without a read, or without an
+// acknowledged write, over the scenario. A scenario's own "writing is
+// healthy < N s" is the limit of writing in always.feature too. Where the
+// primary changed or stopped, reading takes the limit of writing: the
+// client reads on rw only.
+func (s *scenario) measure(key string, w word, n, forN string) error {
+	if forN != "" {
 		return fmt.Errorf("%s takes only a limit, < N s", key)
 	}
-	limit, err := strconv.Atoi(n)
-	if err != nil {
-		return err
+	limit := w.limit
+	if n != "" {
+		var err error
+		if limit, err = strconv.Atoi(n); err != nil {
+			return err
+		}
 	}
-	switch own, ok := s.limits[key]; {
-	case w.writingLimit && s.primaryOut:
-		if limit, ok = s.limits["writing | healthy"]; !ok {
-			limit = s.alwaysWriting
+	switch key {
+	case "writing | healthy":
+		if n != "" {
+			s.writeLimit = limit
+		} else if s.writeLimit > 0 {
+			limit = s.writeLimit
 		}
-		if limit == 0 {
-			return fmt.Errorf("%s takes the limit of writing, and no line gave one", key)
+	case "reading | healthy":
+		if s.primaryOut && n == "" {
+			limit = vocabulary["writing | healthy"].limit
+			if s.writeLimit > 0 {
+				limit = s.writeLimit
+			}
 		}
-	case !w.scenarioLimit:
-	case !s.inAlways:
-		s.limits[key] = limit
-	case ok:
-		limit = own
-	default:
-		s.limits[key] = limit
 	}
 	got, err := w.longest(s.ctx, s)
 	if err != nil {
@@ -435,11 +440,8 @@ func (s *scenario) measure(key string, w word, n, after, forN string) error {
 }
 
 // measureBack waits until the measure is back after the event, by N s after
-// it. It counts when the measure came back, not when the e2e test saw it.
-func (s *scenario) measureBack(key string, w word, n, after string) error {
-	if w.back == nil {
-		return fmt.Errorf("%s takes no \"after the <event>\"", key)
-	}
+// it, by when it came back, not when the e2e saw it.
+func (s *scenario) measureBack(w word, n, after string) error {
 	deadline, err := s.deadline(n, after)
 	if err != nil {
 		return err
@@ -509,20 +511,6 @@ func (s *scenario) deadline(n, after string) (time.Time, error) {
 	return from.Add(time.Duration(secs) * time.Second), nil
 }
 
-// keepWritingLimit keeps the limit always.feature gives writing: reading
-// can take it before the writing line runs.
-func (s *scenario) keepWritingLimit(sn *godog.Scenario) error {
-	line := regexp.MustCompile(isLine)
-	for _, st := range sn.Steps {
-		if m := line.FindStringSubmatch(st.Text); m != nil && m[1] == "writing" && m[2] == "healthy" && m[3] != "" {
-			var err error
-			s.alwaysWriting, err = strconv.Atoi(m[3])
-			return err
-		}
-	}
-	return errors.New(`always.feature has no line "writing is healthy < N s"`)
-}
-
 // stops marks the primary as stopped when one of the pods is the primary
 // now: the one that became primary last, else the first.
 func (s *scenario) stops(pods ...string) {
@@ -537,7 +525,7 @@ func (s *scenario) stops(pods ...string) {
 
 // The roles a line can name. "another instance" is any instance but the
 // primary; "the new primary" is the instance that became primary last; "a
-// replica" is an instance other than the one that became primary last.
+// replica" is one other than that.
 var roleNames = []string{"the new primary", "the primary", "replica 1", "replica 2", "another instance", "a replica"}
 
 const anotherInstance = ""
@@ -549,9 +537,9 @@ type args struct {
 	ns   []int
 }
 
-// lookup turns thing and word into a vocabulary key, replacing each role
-// with <role> and keeping its pod, and each number with <n>. Digits right
-// after a letter are part of a word, as in k3s.
+// lookup turns thing and word into a vocabulary key, with each role as
+// <role> and each number as <n>. Digits right after a letter are part of a
+// word, as in k3s.
 func (s *scenario) lookup(thing, word string) (string, args, error) {
 	var a args
 	key := ""
@@ -611,9 +599,27 @@ func (s *scenario) newPrimary(pod string) {
 	}
 }
 
+// role is the pod of a role. The first line that names one names the
+// instances: the primary, and the replicas by pod name.
 func (s *scenario) role(name string) (string, error) {
 	if name == "another instance" {
 		return anotherInstance, nil
+	}
+	if s.roles == nil && s.up {
+		primary, err := clusterStatus(s.ctx, clusterName, "currentPrimary")
+		if err != nil {
+			return "", err
+		}
+		pods, err := instances(s.ctx, clusterName)
+		if err != nil {
+			return "", err
+		}
+		replicas := slices.DeleteFunc(pods, func(p string) bool { return p == primary })
+		if len(replicas) != nodeCount-1 {
+			return "", fmt.Errorf("instances besides the primary %s: %v", primary, replicas)
+		}
+		s.roles = map[string]string{"the primary": primary, "replica 1": replicas[0], "replica 2": replicas[1], "a replica": replicas[0]}
+		logf("the primary is %s, replica 1 %s, replica 2 %s", primary, replicas[0], replicas[1])
 	}
 	pod, ok := s.roles[name]
 	if !ok {
@@ -622,18 +628,13 @@ func (s *scenario) role(name string) (string, error) {
 	return pod, nil
 }
 
-// runAlways runs always.feature with godog, bound to the same steps and
-// state. Its first failing line fails the scenario.
+// runAlways runs always.feature with the same steps and state. Its first
+// failing line fails the scenario.
 func (s *scenario) runAlways() error {
-	s.inAlways = true
-	format := "progress,cucumber:" + s.results.path("always.cucumber.json") + ",junit:" + s.results.path("always.junit.xml")
 	var failed error
 	suite := godog.TestSuite{
 		Name: "always",
 		ScenarioInitializer: func(sc *godog.ScenarioContext) {
-			sc.Before(func(ctx context.Context, sn *godog.Scenario) (context.Context, error) {
-				return ctx, s.keepWritingLimit(sn)
-			})
 			s.bind(sc)
 			sc.StepContext().After(func(ctx context.Context, st *godog.Step, _ godog.StepResultStatus, err error) (context.Context, error) {
 				if err != nil && failed == nil {
@@ -643,8 +644,8 @@ func (s *scenario) runAlways() error {
 			})
 		},
 		Options: &godog.Options{
-			Format: format, Output: io.Discard, Strict: true, NoColors: true, DefaultContext: s.ctx,
-			Paths: []string{filepath.Join(featuresDir, "always.feature")},
+			Format: "progress,cucumber:" + s.results.path("always.cucumber.json"), Output: io.Discard, Strict: true, NoColors: true,
+			DefaultContext: s.ctx, Paths: []string{filepath.Join(featuresDir, "always.feature")},
 		},
 	}
 	if suite.Run() != 0 && failed == nil {

@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -185,12 +185,12 @@ func reissue(kind string) func(context.Context, *scenario, args) error {
 		if len(a.ns) > 0 {
 			want = time.Duration(a.ns[0]) * 24 * time.Hour
 			ttl := fmt.Sprintf("%dh", a.ns[0]*24)
-			if err := s.w.lab.bao.call(ctx, http.MethodPatch, acmeRole, map[string]any{"ttl": ttl, "max_ttl": ttl}, nil); err != nil {
+			if err := s.lab.bao.call(ctx, http.MethodPatch, acmeRole, map[string]any{"ttl": ttl, "max_ttl": ttl}, nil); err != nil {
 				return err
 			}
 			defer func() {
 				back := map[string]any{"ttl": acmeTTL, "max_ttl": acmeTTL}
-				err = errors.Join(err, s.w.lab.bao.call(ctx, http.MethodPatch, acmeRole, back, nil))
+				err = errors.Join(err, s.lab.bao.call(ctx, http.MethodPatch, acmeRole, back, nil))
 			}()
 		}
 		if err := triggerIssuing(ctx, name); err != nil {
@@ -232,7 +232,7 @@ func triggerIssuing(ctx context.Context, name string) error {
 	}
 	conditions = slices.DeleteFunc(conditions, func(c map[string]any) bool { return c["type"] == "Issuing" })
 	conditions = append(conditions, map[string]any{
-		"type": "Issuing", "status": "True", "reason": "ManuallyTriggered", "message": "Reissued by the e2e test",
+		"type": "Issuing", "status": "True", "reason": "ManuallyTriggered", "message": "Reissued by the e2e",
 		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
 	})
 	patch, err := json.Marshal(map[string]any{"status": map[string]any{"conditions": conditions}})

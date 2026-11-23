@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -9,17 +9,11 @@ import (
 	"time"
 )
 
-// endOutages ends the outages a failed scenario left in place, before
-// always.feature runs, so that a line that failed partway never makes a
-// later line fail. It starts the killed nodes, brings the store back,
-// removes the firewall rule of a cut-off instance, unfences and resumes
-// paused replay. Nothing else is undone, and it does none of CNPG's work:
-// the cluster must get healthy on its own. A scenario that passed has ended its own faults in its own
-// lines.
-//
-// It tries every step and returns what it did and what failed. A pod on a
-// node that it started lost its firewall rule and its paused replay with
-// the node, so those are left alone.
+// endOutages ends the outages a failed line left, before always.feature:
+// it starts killed nodes, brings the store back, reconnects, unfences and
+// resumes replay, and does none of CNPG's work. A pod on a node it starts
+// lost its firewall rule and paused replay with the node. It returns what
+// it did and what failed.
 func (s *scenario) endOutages(ctx context.Context) (string, error) {
 	var done []string
 	var errs []error

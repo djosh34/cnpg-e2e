@@ -1,35 +1,13 @@
-# Where download.yml put the files on the controller.
-downloads: "{{ playbook_dir }}/downloads"
-
-# Where the node keeps helm/ and the versions file of the checkout, and the
-# upstream charts, for helmfile.
-deploy_dir: /opt/deploy
-
-# The variables of the controller's environment that helmfile reads: the
-# company CA and the charts' secrets. They never land on a disk: Ansible
-# puts them on the command line of the task over SSH, which sets them as
-# helmfile's environment. So while helmfile runs, ps shows them to a user of
-# the controller or of the first node; only root logs in to a node.
-helmfile_env:
-  - COMPANY_CA
-  - REGISTRY_HTTP_SECRET
-  - REGISTRY_S3_ACCESS_KEY
-  - REGISTRY_S3_SECRET_KEY
-  - BACKUP_S3_ACCESS_KEY
-  - BACKUP_S3_SECRET_KEY
-  - PG_SERVER_EAB_KID
-  - PG_SERVER_EAB_HMAC
-  - PG_REPLICATION_EAB_KID
-  - PG_REPLICATION_EAB_HMAC
-  - OTEL_CLIENT_EAB_KID
-  - OTEL_CLIENT_EAB_HMAC
-  # Only with pg_restore.
-  - PG_RESTORE_SERVER_EAB_KID
-  - PG_RESTORE_SERVER_EAB_HMAC
-  - PG_RESTORE_REPLICATION_EAB_KID
-  - PG_RESTORE_REPLICATION_EAB_HMAC
-
-# true adds the release pg-restore to the helmfile: a second database
-# cluster that restores the backups and WAL of pg from the store. A later
+# true adds pg-restore, a second cluster restored from pg's backups. A later
 # run without it leaves pg-restore as it is.
 pg_restore: false
+
+# The company CA and the charts' secrets, from the controller's environment.
+# Ansible puts them on the command line over SSH, so they never land on a
+# disk, though ps shows them while helmfile runs.
+secrets: >-
+  {{ ['COMPANY_CA', 'REGISTRY_HTTP_SECRET', 'REGISTRY_S3_ACCESS_KEY', 'REGISTRY_S3_SECRET_KEY',
+      'BACKUP_S3_ACCESS_KEY', 'BACKUP_S3_SECRET_KEY', 'PG_SERVER_EAB_KID', 'PG_SERVER_EAB_HMAC',
+      'PG_REPLICATION_EAB_KID', 'PG_REPLICATION_EAB_HMAC', 'OTEL_CLIENT_EAB_KID', 'OTEL_CLIENT_EAB_HMAC']
+     + (['PG_RESTORE_SERVER_EAB_KID', 'PG_RESTORE_SERVER_EAB_HMAC', 'PG_RESTORE_REPLICATION_EAB_KID',
+         'PG_RESTORE_REPLICATION_EAB_HMAC'] if pg_restore | bool else []) }}

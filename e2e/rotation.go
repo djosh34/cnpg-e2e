@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -26,7 +26,7 @@ const k3sServerDir = "/var/lib/rancher/k3s/server"
 
 // rotateCAs: rotate-ca.yml runs on the nodes.
 func rotateCAs(ctx context.Context, s *scenario, _ args) error {
-	out, err := s.w.lab.playbook(ctx, nil, "rotate-ca.yml")
+	out, err := s.lab.playbook(ctx, nil, "rotate-ca.yml")
 	if err != nil {
 		return err
 	}
@@ -74,14 +74,10 @@ func newCAs(ctx context.Context) (map[string]x509.VerifyOptions, error) {
 	return pools, nil
 }
 
-// everyNodeOnNewCAs: what each node serves and uses comes from the new CAs
-// (newCAs). Its API server and kubelet serve a certificate of the new
-// server CA, etcd's client and peer ports one of the new etcd server and
-// peer CAs. The node's own admin kubeconfig has a client certificate of the
-// new client CA, and the node's API server takes it. The API server's proxy
-// certificate is of the new request-header CA, and a request through it to
-// metrics-server works. A request through the API server to the node's
-// kubelet works, which needs each to take the other's new certificate.
+// everyNodeOnNewCAs: what each node serves and uses comes from the new CAs:
+// the API server, the kubelet and etcd's ports, its admin kubeconfig and
+// the API server's proxy certificate. Requests through the API server to
+// metrics-server and to the kubelet work.
 func everyNodeOnNewCAs(ctx context.Context, _ *scenario, _ args) error {
 	cas, err := newCAs(ctx)
 	if err != nil {
@@ -192,7 +188,7 @@ func nodeCert(ctx context.Context, node, path string) (*x509.Certificate, error)
 var clientCertData = regexp.MustCompile(`client-certificate-data: (\S+)`)
 
 // nodeKubeconfig is a copy of the admin kubeconfig k3s wrote on node i, at
-// that node's API server, next to the e2e test's kubeconfig, and its client
+// that node's API server, next to the run's kubeconfig, and its client
 // certificate.
 func nodeKubeconfig(ctx context.Context, i int) (string, *x509.Certificate, error) {
 	data, err := command(ctx, "docker", "exec", nodeName(i), "cat", "/etc/rancher/k3s/k3s.yaml")

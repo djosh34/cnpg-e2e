@@ -1,19 +1,25 @@
-Feature: Image upgrade
-  The scenario starts from an earlier versions file: the versions.yaml of the
-  newest release that has one, or before such a release, the newest version
-  of versions/versions.yaml in main's history that differs from the
-  checkout's, with the checkout's k3s. upgrade.yml deployed every chart with
-  it. Then upgrade.yml takes the checkout's versions file, as production
-  takes a new one: helmfile upgrades only the releases whose manifests
-  changed, and their workloads roll to the new images. The nodes keep the
-  images of before, so the image check takes both versions files.
+Feature: Upgrade
+  install.yml takes a running cluster from A to B, as production takes a
+  new versions file. A is main's versions file with k3s.previous of B, the
+  minor before; B is the run's. k3s restarts on one node after another,
+  helmfile upgrades the releases whose manifests changed, and their pods
+  roll to the new images.
 
-  Background:
-    Given the cluster is healthy
+  @upgrade
+  Scenario: install.yml upgrades k3s and the images while the client writes and reads
+    Given empty nodes
+    When main's versions file is installed
+    Then the cluster is healthy
+    When the versions file is installed
+    Then every node is on the versions file's k3s
+    And every running container is on an image of the versions file
 
-  @image-upgrade
-  Scenario: upgrade.yml takes a new versions file while the client writes and reads
-    When the versions file of the checkout is applied with upgrade.yml
-    Then every running container is on an image of the versions file < 600 s
-    And the releases whose manifests did not change are at their old revisions
-    And the cluster is healthy < 600 s
+  @upgrade-kvm
+  Scenario: install.yml upgrades k3s and the images on VMs with SELinux enforcing
+    Given empty VMs
+    When main's versions file is installed
+    Then the cluster is healthy
+    When the versions file is installed
+    Then every node is on the versions file's k3s
+    And every running container is on an image of the versions file
+    And SELinux is enforcing

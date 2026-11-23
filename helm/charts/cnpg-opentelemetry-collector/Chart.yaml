@@ -1,0 +1,9 @@
+# The upstream chart opentelemetry-collector-chart with this repo's values. cmd/fill copies its
+# version from versions/versions.yaml and builds charts/.
+apiVersion: v2
+name: cnpg-opentelemetry-collector
+version: 0.1.0
+dependencies:
+  - name: opentelemetry-collector-chart
+    version: "0.182.0"
+    repository: oci://ghcr.io/djosh34/cnpg-e2e
