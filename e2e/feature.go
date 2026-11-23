@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/djosh34/cnpg-e2e/e2e/versions"
 )
@@ -38,6 +39,16 @@ func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name s
 		t.Fatal(err)
 	}
 	l, report, start := startCached(ctx, t, m)
+	// Cleanups run last first, so this one runs before the lab's network
+	// goes: a scenario that ran out of time in a store outage never removed
+	// the store's stand-in.
+	t.Cleanup(func() {
+		remove, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if _, err := command(remove, "docker", "rm", "-f", storeGone); err != nil && !strings.Contains(err.Error(), "No such container") {
+			t.Error(err)
+		}
+	})
 	if name == diskScenario {
 		if err := l.dataDisks(ctx); err != nil {
 			t.Fatal(err)
