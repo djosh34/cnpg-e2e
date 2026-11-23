@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -37,9 +38,10 @@ const (
 )
 
 // The releases of this repo. The nightly puts its versions file into its
-// release as the asset versions.yaml.
+// prerelease as the asset versions.yaml, and so does each code release.
 const (
 	releasesURL   = "https://api.github.com/repos/djosh34/cnpg-e2e/releases?per_page=100"
+	latestURL     = "https://api.github.com/repos/djosh34/cnpg-e2e/releases/latest"
 	versionsAsset = "versions.yaml"
 )
 
@@ -163,33 +165,61 @@ func containersOn(pods string, m *versions.Manifest) error {
 	return errors.Join(errs...)
 }
 
+var nightlyFlag = flag.Bool("nightly", false, "with -scenario image-upgrade: start from the newest nightly release")
+
 // upgradeFrom is the versions file the image upgrade starts from: the
-// versions.yaml of the newest release that has one, or before such a
-// release, the newest version of versions/versions.yaml in main's history
-// that differs from the checkout's: on a pull request that changes it,
-// main's own, and on main the one before. It keeps the k3s of the checkout's
-// versions file: the scenario upgrades images, and k3s takes no downgrade.
-// It returns where it is from, its content and what it pins.
+// versions.yaml of a release (fromRelease), or when there is none, the
+// newest version of versions/versions.yaml in main's history that deploys
+// something else: on a pull request that changes it, main's own, and on
+// main the one before. Two files deploy the same when they pin the same
+// images and charts (deploys). It keeps the k3s of the checkout's versions
+// file: the scenario upgrades images, and k3s takes no downgrade. It
+// returns where it is from, its content and what it pins.
 func upgradeFrom(ctx context.Context) (string, []byte, *versions.Manifest, error) {
 	current, err := os.ReadFile(versionsFile)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	from, data, err := newestRelease(ctx)
-	if err == nil && data == nil {
-		from, data, err = previousOnMain(ctx, current)
-	}
+	m, err := versions.Parse(current)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	if data, err = withK3s(data, current); err != nil {
-		return "", nil, nil, fmt.Errorf("the versions file of %s: %w", from, err)
+	want := deploys(m)
+	other := func(data []byte) ([]byte, bool, error) {
+		merged, err := withK3s(data, current)
+		if err != nil {
+			return nil, false, err
+		}
+		m, err := versions.Parse(merged)
+		if err != nil {
+			return nil, false, err
+		}
+		return merged, deploys(m) != want, nil
+	}
+	from, data, err := fromRelease(ctx, other)
+	if err == nil && data == nil {
+		from, data, err = previousOnMain(ctx, other)
+	}
+	if err != nil {
+		return "", nil, nil, err
 	}
 	before, err := versions.Parse(data)
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("the versions file of %s: %w", from, err)
 	}
 	return from, data, before, nil
+}
+
+// deploys is what the image upgrade deploys of a versions file: each image
+// and chart it pins, by repository and digest. Tags and chart versions are
+// only names.
+func deploys(m *versions.Manifest) string {
+	charts := make([]string, 0, len(m.Charts))
+	for _, c := range m.Charts {
+		charts = append(charts, c.Repository+"/"+c.Name+"@"+c.Digest)
+	}
+	slices.Sort(charts)
+	return fmt.Sprint(m.Pinned(), charts)
 }
 
 // withK3s is the versions file data with the k3s of the versions file
@@ -209,38 +239,77 @@ func withK3s(data, current []byte) ([]byte, error) {
 	return yaml.Marshal(file)
 }
 
-// newestRelease is the asset versions.yaml of the newest release of this
-// repo that has one, and where it is from, or nothing when no release has
-// one. The releases are public. GITHUB_TOKEN, when set, raises the API's
-// rate limit.
-func newestRelease(ctx context.Context) (string, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
-	if err != nil {
-		return "", nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	var releases []struct {
+// fromRelease is the versions.yaml of the release the image upgrade
+// starts from, with the checkout's k3s, and where it is from, or nothing.
+// With -nightly, as the nightly runs it, that is the newest nightly-*
+// release of the latest 100 whose file deploys something else than the
+// checkout's (other): last night's. Without, it is GitHub's latest
+// release when its file deploys something else. That is never a
+// prerelease, so never a nightly's: a pull request's file can be older
+// than last night's, and the scenario would downgrade. Every code release
+// has a versions.yaml. The releases are public. GITHUB_TOKEN, when set, raises the
+// API's rate limit.
+func fromRelease(ctx context.Context, other func([]byte) ([]byte, bool, error)) (string, []byte, error) {
+	type release struct {
 		TagName string `json:"tag_name"`
 		Assets  []struct {
 			Name string `json:"name"`
 			URL  string `json:"browser_download_url"`
 		} `json:"assets"`
 	}
-	if err := callJSON(&http.Client{Timeout: time.Minute}, req, &releases); err != nil {
-		return "", nil, err
+	var releases []release
+	if *nightlyFlag {
+		if err := getJSON(ctx, releasesURL, &releases); err != nil {
+			return "", nil, err
+		}
+	} else {
+		var latest release
+		err := getJSON(ctx, latestURL, &latest)
+		// No release yet.
+		var status statusError
+		if errors.As(err, &status) && status.code == http.StatusNotFound {
+			return "", nil, nil
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		releases = []release{latest}
 	}
 	for _, r := range releases {
+		if *nightlyFlag && !strings.HasPrefix(r.TagName, "nightly-") {
+			continue
+		}
 		for _, a := range r.Assets {
-			if a.Name == versionsAsset {
-				data, err := fetch(ctx, a.URL)
-				return "the release " + r.TagName, data, err
+			if a.Name != versionsAsset {
+				continue
+			}
+			data, err := fetch(ctx, a.URL)
+			if err != nil {
+				return "", nil, err
+			}
+			merged, ok, err := other(data)
+			if err != nil {
+				return "", nil, fmt.Errorf("the versions file of the release %s: %w", r.TagName, err)
+			}
+			if ok {
+				return "the release " + r.TagName, merged, nil
 			}
 		}
 	}
 	return "", nil, nil
+}
+
+// getJSON decodes the answer of GitHub's API at url into out.
+func getJSON(ctx context.Context, url string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return callJSON(&http.Client{Timeout: time.Minute}, req, out)
 }
 
 // main as a clone of this repo has it.
@@ -248,7 +317,7 @@ const mainBranch = "origin/main"
 
 // previousOnMain is the newest version of versions/versions.yaml in main's
 // history that differs from current, and where it is from.
-func previousOnMain(ctx context.Context, current []byte) (string, []byte, error) {
+func previousOnMain(ctx context.Context, other func([]byte) ([]byte, bool, error)) (string, []byte, error) {
 	out, err := command(ctx, "git", "-C", "..", "log", "--format=%H", mainBranch, "--", "versions/versions.yaml")
 	if err != nil {
 		return "", nil, err
@@ -258,11 +327,15 @@ func previousOnMain(ctx context.Context, current []byte) (string, []byte, error)
 		if err != nil {
 			return "", nil, err
 		}
-		if strings.TrimSpace(data) != strings.TrimSpace(string(current)) {
-			return "the commit " + commit + " of main", []byte(data + "\n"), nil
+		merged, ok, err := other([]byte(data))
+		if err != nil {
+			return "", nil, fmt.Errorf("the versions file of the commit %s of main: %w", commit, err)
+		}
+		if ok {
+			return "the commit " + commit + " of main", merged, nil
 		}
 	}
-	return "", nil, fmt.Errorf("no release has a versions file, and %s has no other versions/versions.yaml; "+
+	return "", nil, fmt.Errorf("no release and no versions/versions.yaml in %s pins other images or charts than the checkout's; "+
 		"a shallow clone has no history: git fetch --unshallow origin main", mainBranch)
 }
 
