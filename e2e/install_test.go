@@ -74,15 +74,15 @@ func testInstall(ctx context.Context, t *testing.T, m *versions.Manifest, vms bo
 	writeReport(t, scenario, report)
 }
 
-// selinuxState prints the SELinux mode of a node, the SELinux label of its
-// k3s, and the number of SELinux denials in its audit log, each on a line.
+// selinuxState prints the SELinux mode of a node and the SELinux label of
+// its k3s, each on a line, then the SELinux denials in its audit log.
 const selinuxState = `getenforce
 ps -o label= -p "$(systemctl show --property MainPID --value k3s)"
-grep -c 'avc: *denied' /var/log/audit/audit.log || true`
+grep 'avc: *denied' /var/log/audit/audit.log || true`
 
 // enforcing checks that SELinux is enforcing on every node and that k3s
 // runs in container_runtime_t, the domain the k3s-selinux policy gives it,
-// and returns what it saw, with the number of denials on each node.
+// and returns what it saw, with the denials of each node.
 func (l *lab) enforcing(ctx context.Context) (string, error) {
 	report := "SELinux on the nodes:\n"
 	for i := range nodeCount {
@@ -90,11 +90,15 @@ func (l *lab) enforcing(ctx context.Context) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		f := strings.Fields(out)
-		if code != 0 || len(f) != 3 || f[0] != "Enforcing" || !strings.Contains(f[1], ":container_runtime_t:") {
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		if code != 0 || len(lines) < 2 || lines[0] != "Enforcing" || !strings.Contains(lines[1], ":container_runtime_t:") {
 			return "", fmt.Errorf("SELinux on %s: exit code %d: want Enforcing and k3s in container_runtime_t:\n%s", nodeName(i), code, out)
 		}
-		report += fmt.Sprintf("%s: %s, k3s runs as %s, %s denials in the audit log\n", nodeName(i), f[0], f[1], f[2])
+		denials := lines[2:]
+		report += fmt.Sprintf("%s: %s, k3s runs as %s, %d denials in the audit log\n", nodeName(i), lines[0], lines[1], len(denials))
+		for _, d := range denials {
+			report += "  " + d + "\n"
+		}
 	}
 	return report, nil
 }
