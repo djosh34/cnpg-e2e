@@ -57,7 +57,8 @@ func testInstall(ctx context.Context, t *testing.T, m *versions.Manifest) {
 // deploy fills the registry with every image of the versions file, then
 // runs playbook, install.yml or upgrade.yml, with the charts' secrets, and
 // waits until the cluster is healthy. It returns what it saw, and the
-// secrets, for another run of a playbook.
+// secrets, for another run of a playbook. When the playbook or the cluster
+// fails, it prints the cluster's state first.
 func (l *lab) deploy(ctx context.Context, m *versions.Manifest, playbook string) (string, map[string]string, error) {
 	start := time.Now()
 	logf("filling the registry with every image of the versions file")
@@ -71,16 +72,20 @@ func (l *lab) deploy(ctx context.Context, m *versions.Manifest, playbook string)
 	}
 	logf("running %s", playbook)
 	start = time.Now()
+	failed := func(err error) (string, map[string]string, error) {
+		logf("%s", l.state(ctx))
+		return "", nil, err
+	}
 	out, err := l.playbook(ctx, env, playbook)
 	if err != nil {
-		return "", nil, err
+		return failed(err)
 	}
 	report += fmt.Sprintf("\n%s took %s:\n%s\n", playbook, time.Since(start).Round(time.Second), recap(out))
 	start = time.Now()
 	logf("waiting up to 15 min for the cluster to be healthy")
 	err = poll(ctx, time.Now().Add(15*time.Minute), l.clusterHealthy)
 	if err != nil {
-		return "", nil, fmt.Errorf("the cluster is not healthy: %w", err)
+		return failed(fmt.Errorf("the cluster is not healthy: %w", err))
 	}
 	logf("waiting up to 10 min for the first backup and for the metrics of every source")
 	mon := &monitoring{http: &http.Client{Timeout: 20 * time.Second}}
@@ -88,7 +93,7 @@ func (l *lab) deploy(ctx context.Context, m *versions.Manifest, playbook string)
 		return errors.Join(l.backedUp(ctx), mon.everySource(ctx))
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("the backup or the monitoring: %w", err)
+		return failed(fmt.Errorf("the backup or the monitoring: %w", err))
 	}
 	report += fmt.Sprintf("\nThe cluster was healthy, with its first backup and the metrics of every source, %s after %s.\n",
 		time.Since(start).Round(time.Second), playbook)
@@ -169,6 +174,40 @@ func (l *lab) backedUp(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("no completed backup of %s: %q", clusterName, phases)
+}
+
+// labState shows the cluster's state: kubectl's arguments.
+var labState = [][]string{
+	{"get", "nodes", "-o", "wide"},
+	{"get", "pods", "-A", "-o", "wide"},
+	{"get", "clusters,backups,certificates,certificaterequests,orders,challenges,issuers", "-A"},
+	{"describe", "cluster", clusterName, "-n", namespace},
+	{"get", "events", "-A", "--sort-by=.lastTimestamp"},
+	{"logs", "-n", "cnpg-system", "-l", "app.kubernetes.io/name=cloudnative-pg", "--tail=50", "--prefix"},
+	{"logs", "-n", "registry", "-l", "app.kubernetes.io/name=registry", "--tail=30", "--prefix"},
+	{"logs", "-n", namespace, "-l", "cnpg.io/cluster=" + clusterName, "--all-containers", "--tail=30", "--prefix", "--max-log-requests=20"},
+}
+
+// state is the cluster's state, for a failed deploy, with the failed pulls
+// that containerd's log on each node shows.
+func (l *lab) state(ctx context.Context) string {
+	state := "The state of the cluster:\n"
+	for _, args := range labState {
+		out, err := l.kubectl(ctx, args...)
+		if err != nil {
+			out = err.Error()
+		}
+		state += fmt.Sprintf("\n$ kubectl %s\n%s\n", strings.Join(args, " "), out)
+	}
+	for i, node := range l.nodes {
+		_, out, err := execIn(ctx, node, []string{"sh", "-c",
+			"grep -iE 'error|fail' " + containerdDir + "/containerd.log | tail -n 20"})
+		if err != nil {
+			out = err.Error()
+		}
+		state += fmt.Sprintf("\n$ the errors of containerd on %s\n%s\n", nodeName(i), out)
+	}
+	return state
 }
 
 // writeReport logs the report of a scenario and writes it to
