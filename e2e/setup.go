@@ -99,15 +99,19 @@ func (s *scenario) fromCache() (string, error) {
 	return commit, nil
 }
 
-// installSettled installs, then waits for a healthy cluster, a backup of
-// the most recent schedule and the metrics of every source.
+// installSettled installs, then waits for a healthy cluster on the images
+// of the versions file, a backup of the most recent schedule and the
+// metrics of every source. On a cache of other images, CNPG rolls the
+// instances after install.yml ends, so healthy alone can pass before it.
 func (s *scenario) installSettled() error {
 	ctx := s.ctx
 	if err := s.install(ctx, s.data); err != nil {
 		return err
 	}
-	logf("waiting for a healthy cluster, its backup and the metrics of every source")
-	err := poll(ctx, time.Now().Add(15*time.Minute), func(ctx context.Context) error { return healthy(ctx, clusterName) })
+	logf("waiting for a healthy cluster on the versions file, its backup and the metrics of every source")
+	err := poll(ctx, time.Now().Add(15*time.Minute), func(ctx context.Context) error {
+		return errors.Join(healthy(ctx, clusterName), onVersionsFile(ctx, s, args{}))
+	})
 	if err != nil {
 		return err
 	}
