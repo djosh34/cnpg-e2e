@@ -59,7 +59,8 @@ Feature: Failover
     switch waits for that primary's next WAL record. The
     catalog read writes the new primary's hint bits now, so the rejoin writes
     no WAL. The old primary's node is down for over 5 minutes, so
-    CNPGReplicaDown fires for it. One write ends the wait.
+    CNPGReplicaDown fires for it. One write ends the wait; the instance is
+    ready at its next readiness probe, which runs every 10 s.
 
     Given a running cluster
     And no writes
@@ -71,5 +72,5 @@ Feature: Failover
     When the node starts
     And 600 s pass
     And a row is written
-    Then the cluster is healthy < 10 s
+    Then the cluster is healthy < 20 s
     And CNPGReplicaDown resolves for the primary < 120 s
