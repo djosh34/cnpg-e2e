@@ -17,12 +17,16 @@
   loop: [container-selinux, k3s-selinux]
   when: selinux | bool
 
+# download.yml checked each file against its sha256 in the versions file,
+# which pins it more closely than a signature: the node has no key of
+# k3s-selinux's signer.
 - name: Install the SELinux policies, with every repository off
   ansible.builtin.dnf:
     name:
       - /var/cache/k3s-selinux/container-selinux.rpm
       - /var/cache/k3s-selinux/k3s-selinux.rpm
     disablerepo: "*"
+    disable_gpg_check: true
     state: present
   when: selinux | bool
 
