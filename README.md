@@ -26,7 +26,7 @@ This needs an amd64 machine with Go and a Docker that allows privileged containe
 
 ## Releases
 
-A nightly copies the newest Docker Hardened Images and charts into this repo's packages, runs every scenario on them and publishes a release of two files: the versions file it ran on and `report.yaml`, the result of each scenario ([the nightly](docs/runner.md#the-nightly)). A pull request can swap that versions file in.
+A nightly copies the newest Docker Hardened Images and charts into this repo's packages, runs every scenario on them and publishes a release of two files: the versions file it ran on and `report.yaml`, the result of each scenario ([the nightly](docs/runner.md#the-nightly)). A pull request can swap that versions file in. A code release, such as `v0.1.0`, also has the versions file of its commit.
 
 ## Files
 

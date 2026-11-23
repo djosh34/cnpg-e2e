@@ -62,3 +62,30 @@ func TestWithK3s(t *testing.T) {
 		}
 	}
 }
+
+// Two versions files deploy the same when only a download or a comment
+// differs, and not when an image does.
+func TestDeploys(t *testing.T) {
+	data, err := os.ReadFile(versionsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := versions.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pgDigest, _ := strings.Cut(m.PostgreSQL.ImageName, "@")
+	for change, same := range map[string]bool{
+		strings.Replace(string(data), "container-selinux-2.250.0", "container-selinux-2.251.0", 1): true,
+		"# a comment\n" + string(data): true,
+		strings.Replace(string(data), pgDigest, "sha256:"+strings.Repeat("7", 64), 1): false,
+	} {
+		other, err := versions.Parse([]byte(change))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (deploys(other) == deploys(m)) != same {
+			t.Errorf("deploys the same: %v, want %v", !same, same)
+		}
+	}
+}

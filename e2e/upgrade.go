@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -166,28 +165,36 @@ func containersOn(pods string, m *versions.Manifest) error {
 	return errors.Join(errs...)
 }
 
-var nightlyFlag = flag.Bool("nightly", false, "with -scenario image-upgrade: start from the newest release, a nightly's prerelease too")
+var nightlyFlag = flag.Bool("nightly", false, "with -scenario image-upgrade: start from the newest nightly release")
 
 // upgradeFrom is the versions file the image upgrade starts from: the
 // versions.yaml of a release (fromRelease), or when there is none, the
 // newest version of versions/versions.yaml in main's history that deploys
 // something else: on a pull request that changes it, main's own, and on
-// main the one before. Two files deploy the same when they differ only in
-// k3s or comments. It keeps the k3s of the checkout's versions file: the
-// scenario upgrades images, and k3s takes no downgrade. It returns where it
-// is from, its content and what it pins.
+// main the one before. Two files deploy the same when they pin the same
+// images and charts (deploys). It keeps the k3s of the checkout's versions
+// file: the scenario upgrades images, and k3s takes no downgrade. It
+// returns where it is from, its content and what it pins.
 func upgradeFrom(ctx context.Context) (string, []byte, *versions.Manifest, error) {
 	current, err := os.ReadFile(versionsFile)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	want, err := withK3s(current, current)
+	m, err := versions.Parse(current)
 	if err != nil {
 		return "", nil, nil, err
 	}
+	want := deploys(m)
 	other := func(data []byte) ([]byte, bool, error) {
 		merged, err := withK3s(data, current)
-		return merged, err == nil && !bytes.Equal(merged, want), err
+		if err != nil {
+			return nil, false, err
+		}
+		m, err := versions.Parse(merged)
+		if err != nil {
+			return nil, false, err
+		}
+		return merged, deploys(m) != want, nil
 	}
 	from, data, err := fromRelease(ctx, other)
 	if err == nil && data == nil {
@@ -202,6 +209,10 @@ func upgradeFrom(ctx context.Context) (string, []byte, *versions.Manifest, error
 	}
 	return from, data, before, nil
 }
+
+// deploys is what the image upgrade deploys of a versions file: the images
+// and charts it pins.
+func deploys(m *versions.Manifest) string { return fmt.Sprint(m.Images(), m.Charts) }
 
 // withK3s is the versions file data with the k3s of the versions file
 // current.
@@ -222,12 +233,13 @@ func withK3s(data, current []byte) ([]byte, error) {
 
 // fromRelease is the versions.yaml of the release the image upgrade
 // starts from, with the checkout's k3s, and where it is from, or nothing.
-// With -nightly, as the nightly runs it, that is the newest of the latest
-// 100 releases whose file is another than the checkout's (other): last
-// night's. Without, it is GitHub's latest release when its file is
-// another, which is never a prerelease, so never a nightly's: a pull
-// request's file can be older than last night's, and the scenario would
-// downgrade. The releases are public. GITHUB_TOKEN, when set, raises the
+// With -nightly, as the nightly runs it, that is the newest nightly-*
+// release of the latest 100 whose file deploys something else than the
+// checkout's (other): last night's. Without, it is GitHub's latest
+// release when its file deploys something else. That is never a
+// prerelease, so never a nightly's: a pull request's file can be older
+// than last night's, and the scenario would downgrade. Every code release
+// has a versions.yaml. The releases are public. GITHUB_TOKEN, when set, raises the
 // API's rate limit.
 func fromRelease(ctx context.Context, other func([]byte) ([]byte, bool, error)) (string, []byte, error) {
 	type release struct {
@@ -256,6 +268,9 @@ func fromRelease(ctx context.Context, other func([]byte) ([]byte, bool, error)) 
 		releases = []release{latest}
 	}
 	for _, r := range releases {
+		if *nightlyFlag && !strings.HasPrefix(r.TagName, "nightly-") {
+			continue
+		}
 		for _, a := range r.Assets {
 			if a.Name != versionsAsset {
 				continue
@@ -312,7 +327,7 @@ func previousOnMain(ctx context.Context, other func([]byte) ([]byte, bool, error
 			return "the commit " + commit + " of main", merged, nil
 		}
 	}
-	return "", nil, fmt.Errorf("no release has a versions file, and %s has no other versions/versions.yaml; "+
+	return "", nil, fmt.Errorf("no release and no versions/versions.yaml in %s pins other images or charts than the checkout's; "+
 		"a shallow clone has no history: git fetch --unshallow origin main", mainBranch)
 }
 
