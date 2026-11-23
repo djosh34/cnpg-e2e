@@ -7,17 +7,18 @@ name: e2e
 # Docker, since those of e2e/features get no charts until they start from
 # the cache too. airgap checks the nodes, the controller and the fill,
 # install installs k3s and every chart of helm/ on empty nodes with
-# ansible/install.yml, and restore starts a clean k3s cluster from the cache
-# and deploys the charts with ansible/upgrade.yml. Each job uploads the
-# run's files, also when its scenario failed. First, the images job
-# publishes the images of e2e/images that the packages do not have yet. When
-# restore runs, the cache job builds and publishes the cache when the
+# ansible/install.yml, install-kvm does the same on three VMs with SELinux
+# enforcing, under the runner's KVM, and restore starts a clean k3s cluster
+# from the cache and deploys the charts with ansible/upgrade.yml. Each job
+# uploads the run's files, also when its scenario failed. First, the images
+# job publishes the images of e2e/images that the packages do not have yet.
+# When restore runs, the cache job builds and publishes the cache when the
 # packages do not have it, and restore waits for it; no other scenario does.
 on:
   workflow_dispatch:
     inputs:
       scenarios:
-        description: Scenario tags, separated by commas; empty for airgap, install and restore
+        description: Scenario tags, separated by commas; empty for airgap, install, install-kvm and restore
         type: string
         default: ""
 
@@ -45,7 +46,7 @@ jobs:
           if [[ -n $WANTED ]]; then
             picked=$(tr -s ', ' '\n' <<<"$WANTED" | sed '/^$/d' | sort -u)
           else
-            picked=$(printf '%s\n' airgap install restore)
+            picked=$(printf '%s\n' airgap install install-kvm restore)
           fi
           # restore runs in its own job, after the cache job.
           restore=false

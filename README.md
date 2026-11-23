@@ -10,13 +10,15 @@ go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario instal
 
 - **Needs** an amd64 machine with Go and a Docker that allows privileged containers. A run first loads the kernel module `br_netfilter` on the machine and raises its `fs.inotify.max_user_instances` to 1024, from a privileged container.
 - **Results** go to `results/`. The test passes when the scenario passed.
-- **Scenarios** are `airgap`, `install`, `restore` and `cache` below, and the tags in `e2e/features/`, after each of which `always.feature` runs. Those of the feature files get no charts yet, so they fail until they start from the cache like `restore`.
+- **Scenarios** are `airgap`, `install`, `install-kvm`, `restore` and `cache` below, and the tags in `e2e/features/`, after each of which `always.feature` runs. Those of the feature files get no charts yet, so they fail until they start from the cache like `restore`.
 
 `go -C e2e test ./...` without `-scenario` runs the unit tests only and starts no container.
 
 The scenario `airgap` runs on the machine's own Docker with only Go and Docker: the services outside k3s, three empty Rocky Linux 9 nodes with systemd and sshd on a network with no route to the internet, and a controller with Ansible. It checks that no node reaches the internet, that the controller reaches every node over SSH, and fills the registry with every image of the versions file.
 
 The scenario `install` starts the same machines with empty nodes, fills the registry and runs `install.yml`: k3s, then every chart. It checks that the database cluster is healthy, has its first backup and sends the metrics of every source to Prometheus, then that `upgrade.yml` on the running cluster changes nothing.
+
+The scenario `install-kvm` is `install` on three Rocky Linux 9 VMs under QEMU and KVM, with SELinux enforcing, and `selinux=true` in the inventory (below). The services outside k3s and the controller stay in Docker. Each VM runs in a privileged container of `e2e/images/vm` and takes that container's address on the network, so nothing else changes. It also checks that SELinux is enforcing on every node and that k3s runs in its SELinux domain, `container_runtime_t`. It needs `/dev/kvm` on the machine; no other scenario does.
 
 The scenario `restore` starts the same machines from the cache: a clean k3s cluster that `install.yml` installed without its helmfile step, with no charts, and the store and company CA next to it. It checks that every node turns Ready, then fills the registry, runs `upgrade.yml` and checks the cluster as `install` does. The cache is one image per container in this repo's packages, tagged by a hash of what makes it: the node, store and CA images, the k3s and node tools of the versions file, `ansible/` but its role `helmfile`, and the Go code that sets the machines up. A run that finds no cache builds it on the machine. The scenario `cache` builds it when the packages do not have it, and with `-push` pushes it, which only CI does.
 
@@ -40,7 +42,7 @@ ansible_user=root
 cd ansible && ansible-playbook -i inventory.ini install.yml
 ```
 
-`dns_server` sets the DNS server of k3s and its pods, where the nodes' own `/etc/resolv.conf` does not do. `--skip-tags helmfile` installs k3s alone.
+`dns_server` sets the DNS server of k3s and its pods, where the nodes' own `/etc/resolv.conf` does not do. `selinux=true` is for nodes with SELinux enforcing, Rocky Linux 9.9 machines: before k3s, the role installs `container-selinux` and `k3s-selinux` from the files of the versions file with every repository off. Rocky Linux 9.9 has every other package they need. k3s's config gets `selinux: true`. Set it for the whole group. `--skip-tags helmfile` installs k3s alone.
 
 ## Deploy the charts
 
@@ -77,7 +79,7 @@ go -C e2e run ./cmd/fill ../versions/versions.yaml registry.example:5000
 | `ansible/` | The playbooks that install and upgrade k3s, and their roles |
 | `ansible/k3s/` | The k3s config files of every node |
 | `e2e/` | The Go runner, its client and the feature files |
-| `e2e/images/` | The images this repo builds: the nodes, the controller and the services outside k3s, with their config and the monitoring files |
+| `e2e/images/` | The images this repo builds: the nodes, the VM of `install-kvm`, the controller and the services outside k3s, with their config and the monitoring files |
 | `e2e/cmd/` | The `fill`, `mirror` and `images` commands |
 
 Licence: Apache License 2.0.

@@ -16,30 +16,50 @@ import (
 )
 
 // The scenario that installs everything on empty nodes, as production
-// does on new machines:
+// does on new machines, and its KVM version, on three VMs with SELinux
+// enforcing:
 //
 //	go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario install
-const installScenario = "install"
+//	go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario install-kvm
+//
+// install-kvm needs /dev/kvm on the machine.
+const (
+	installScenario    = "install"
+	installKVMScenario = "install-kvm"
+)
 
-// testInstall starts the lab with empty nodes, fills the registry and runs
-// install.yml: k3s, then every chart. It checks that the cluster is
-// healthy, then that upgrade.yml on the running cluster changes nothing. It
-// writes what it saw to results/install/report.txt.
-func testInstall(ctx context.Context, t *testing.T, m *versions.Manifest) {
-	node, err := images.Get(ctx, "node")
-	if err != nil {
-		t.Fatal(err)
+// testInstall starts the lab with empty nodes, VMs with vms, fills the
+// registry and runs install.yml: k3s, then every chart. It checks that the
+// cluster is healthy, on VMs also that SELinux is enforcing and k3s runs
+// in its domain, then that upgrade.yml on the running cluster changes
+// nothing. It writes what it saw to results/<scenario>/report.txt.
+func testInstall(ctx context.Context, t *testing.T, m *versions.Manifest, vms bool) {
+	scenario := installScenario
+	if vms {
+		scenario = installKVMScenario
+	} else {
+		node, err := images.Get(ctx, "node")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := prepareHost(ctx, node); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := prepareHost(ctx, node); err != nil {
-		t.Fatal(err)
-	}
-	l, err := startLab(ctx, t, m, nil)
+	l, err := startLab(ctx, t, m, nil, vms)
 	if err != nil {
 		t.Fatal(err)
 	}
 	report, env, err := l.deploy(ctx, m, "install.yml")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if vms {
+		enforcing, err := l.enforcing(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report += "\n" + enforcing
 	}
 	logf("running upgrade.yml, which changes nothing on the running cluster")
 	start := time.Now()
@@ -51,7 +71,37 @@ func testInstall(ctx context.Context, t *testing.T, m *versions.Manifest) {
 		t.Fatal(err)
 	}
 	report += fmt.Sprintf("\nupgrade.yml changed nothing, in %s:\n%s\n", time.Since(start).Round(time.Second), recap(out))
-	writeReport(t, installScenario, report)
+	writeReport(t, scenario, report)
+}
+
+// selinuxState prints the SELinux mode of a node and the SELinux label of
+// its k3s, each on a line, then the SELinux denials in its audit log. grep
+// exits with 1 when there is none, and with 2 when it cannot read the log.
+const selinuxState = `getenforce
+ps -o label= -p "$(systemctl show --property MainPID --value k3s)"
+grep 'avc: *denied' /var/log/audit/audit.log || [ $? -eq 1 ]`
+
+// enforcing checks that SELinux is enforcing on every node and that k3s
+// runs in container_runtime_t, the domain the k3s-selinux policy gives it,
+// and returns what it saw, with the denials of each node.
+func (l *lab) enforcing(ctx context.Context) (string, error) {
+	report := "SELinux on the nodes:\n"
+	for i := range nodeCount {
+		code, out, err := l.onNode(ctx, i, "sh", "-c", selinuxState)
+		if err != nil {
+			return "", err
+		}
+		lines := strings.Split(strings.TrimSpace(out), "\n")
+		if code != 0 || len(lines) < 2 || lines[0] != "Enforcing" || !strings.Contains(lines[1], ":container_runtime_t:") {
+			return "", fmt.Errorf("SELinux on %s: exit code %d: want Enforcing and k3s in container_runtime_t:\n%s", nodeName(i), code, out)
+		}
+		denials := lines[2:]
+		report += fmt.Sprintf("%s: %s, k3s runs as %s, %d denials in the audit log\n", nodeName(i), lines[0], lines[1], len(denials))
+		for _, d := range denials {
+			report += "  " + d + "\n"
+		}
+	}
+	return report, nil
 }
 
 // deploy fills the registry with every image of the versions file, then
@@ -125,7 +175,7 @@ func (l *lab) chartSecrets(ctx context.Context) (map[string]string, error) {
 
 // kubectl runs k3s's kubectl on the first node and returns its output.
 func (l *lab) kubectl(ctx context.Context, args ...string) (string, error) {
-	code, out, err := execIn(ctx, l.nodes[0], append([]string{"k3s", "kubectl"}, args...))
+	code, out, err := l.onNode(ctx, 0, append([]string{"k3s", "kubectl"}, args...)...)
 	if err != nil {
 		return "", err
 	}
@@ -199,9 +249,8 @@ func (l *lab) state(ctx context.Context) string {
 		}
 		state += fmt.Sprintf("\n$ kubectl %s\n%s\n", strings.Join(args, " "), out)
 	}
-	for i, node := range l.nodes {
-		_, out, err := execIn(ctx, node, []string{"sh", "-c",
-			"grep -iE 'error|fail' " + containerdDir + "/containerd.log | tail -n 20"})
+	for i := range nodeCount {
+		_, out, err := l.onNode(ctx, i, "sh", "-c", "grep -iE 'error|fail' "+containerdDir+"/containerd.log | tail -n 20")
 		if err != nil {
 			out = err.Error()
 		}

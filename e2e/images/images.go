@@ -1,9 +1,10 @@
 // Package images holds the images this repo builds for the e2e test, one
-// per directory here: the nodes, the controller and the services outside
-// k3s that need setup. Each is a package of this repo, tagged by a hash of
-// its directory, so a change of any file gives a new tag. Get pulls an
-// image, or builds it where its package does not have that tag yet, as on
-// a branch that changed it; Publish builds and pushes each missing tag.
+// per directory here: the nodes, the VM of the KVM scenarios, the controller
+// and the services outside k3s that need setup. Each is a package of this
+// repo, tagged by a hash of its directory, so a change of any file gives a
+// new tag. Get pulls an image, or builds it where its package does not have
+// that tag yet, as on a branch that changed it; Publish builds and pushes
+// each missing tag.
 package images
 
 import (
@@ -26,7 +27,7 @@ import (
 	"github.com/regclient/regclient/types/ref"
 )
 
-//go:embed acme alertmanager controller dns grafana node otel prometheus s3
+//go:embed acme alertmanager controller dns grafana node otel prometheus s3 vm
 var files embed.FS
 
 // names are the names of the images, their directories.
