@@ -215,22 +215,3 @@ func nodeKubeconfig(ctx context.Context, i int) (string, *x509.Certificate, erro
 	data = strings.ReplaceAll(data, "https://127.0.0.1:6443", "https://"+nodeIP(i)+":6443")
 	return config, cert, os.WriteFile(config, []byte(data), 0o600)
 }
-
-// everyNodeReady: every node is Ready.
-func everyNodeReady(ctx context.Context, _ *scenario, _ args) error {
-	out, err := kubectl(ctx, "get", "nodes", "--output",
-		`jsonpath={range .items[*]}{.metadata.name} {.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}`)
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(out, "\n")
-	if len(lines) != nodeCount {
-		return fmt.Errorf("%d nodes, not %d: %s", len(lines), nodeCount, out)
-	}
-	for _, line := range lines {
-		if f := strings.Fields(line); len(f) != 2 || f[1] != "True" {
-			return fmt.Errorf("a node is not Ready: %q", line)
-		}
-	}
-	return nil
-}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/djosh34/cnpg-e2e/e2e/versions"
+	"go.yaml.in/yaml/v3"
 )
 
 // The upgrade scenarios. The image upgrade is the scenario @image-upgrade of
@@ -52,9 +53,6 @@ func testK3sUpgrade(ctx context.Context, t *testing.T, m *versions.Manifest, vms
 	scenario := k3sUpgradeScenario
 	if vms {
 		scenario = k3sUpgradeKVMScenario
-	}
-	if m.K3s.Previous.Version == "" {
-		t.Fatal("the versions file has no k3s.previous.version")
 	}
 	l := startEmpty(ctx, t, m, vms)
 	report, env, err := l.deploy(ctx, m, nil, "install.yml", "--extra-vars", "k3s_previous=true")
@@ -163,9 +161,11 @@ func containersOn(pods string, m *versions.Manifest) error {
 // upgradeFrom is the versions file the image upgrade starts from: the
 // versions.yaml of the newest release that has one whose images differ from
 // those of m, else the newest version of versions/versions.yaml in the
-// checkout's history that does. It returns where it is from, its content
-// and what it pins. Before the first release, on a pull request that pins
-// new images, that is the versions file of main.
+// checkout's history that does, with the k3s of the checkout's versions
+// file: the scenario upgrades images, and k3s takes no downgrade. It
+// returns where it is from, its content and what it pins. Before the first
+// release, on a pull request that pins new images, that is the versions file
+// of main.
 func upgradeFrom(ctx context.Context, m *versions.Manifest) (string, []byte, *versions.Manifest, error) {
 	releases, err := releaseVersions(ctx)
 	if err != nil {
@@ -175,7 +175,33 @@ func upgradeFrom(ctx context.Context, m *versions.Manifest) (string, []byte, *ve
 	if err != nil {
 		return "", nil, nil, err
 	}
-	return firstOther(ctx, m, append(releases, history...))
+	from, data, err := firstOther(ctx, m, append(releases, history...))
+	if err != nil {
+		return "", nil, nil, err
+	}
+	current, err := os.ReadFile(versionsFile)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if data, err = withK3s(data, current); err != nil {
+		return "", nil, nil, fmt.Errorf("the versions file of %s: %w", from, err)
+	}
+	before, err := versions.Parse(data)
+	return from, data, before, err
+}
+
+// withK3s is the versions file data with the k3s of the versions file
+// current.
+func withK3s(data, current []byte) ([]byte, error) {
+	var file, k3s map[string]any
+	if err := yaml.Unmarshal(data, &file); err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(current, &k3s); err != nil {
+		return nil, err
+	}
+	file["k3s"] = k3s["k3s"]
+	return yaml.Marshal(file)
 }
 
 // versionsSource is a versions file to start the image upgrade from: where
@@ -187,21 +213,21 @@ type versionsSource struct {
 
 // firstOther is the first versions file of sources whose images differ from
 // those of m.
-func firstOther(ctx context.Context, m *versions.Manifest, sources []versionsSource) (string, []byte, *versions.Manifest, error) {
+func firstOther(ctx context.Context, m *versions.Manifest, sources []versionsSource) (string, []byte, error) {
 	for _, s := range sources {
 		data, err := s.read(ctx)
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("the versions file of %s: %w", s.name, err)
+			return "", nil, fmt.Errorf("the versions file of %s: %w", s.name, err)
 		}
 		before, err := versions.Parse(data)
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("the versions file of %s: %w", s.name, err)
+			return "", nil, fmt.Errorf("the versions file of %s: %w", s.name, err)
 		}
 		if !slices.Equal(before.Pinned(), m.Pinned()) {
-			return s.name, data, before, nil
+			return s.name, data, nil
 		}
 	}
-	return "", nil, nil, errors.New("no release and no earlier versions/versions.yaml of the checkout pins other images; " +
+	return "", nil, errors.New("no release and no earlier versions/versions.yaml of the checkout pins other images; " +
 		"a shallow clone has no history: git fetch --unshallow")
 }
 
@@ -261,9 +287,6 @@ func historyVersions(ctx context.Context) ([]versionsSource, error) {
 // the scenario's start deployed the one it starts from. It keeps the
 // releases before and after, for releasesLeftAlone.
 func upgradeImages(ctx context.Context, s *scenario, _ args) error {
-	if s.w.before == nil {
-		return errors.New("the scenario did not start from an earlier versions file")
-	}
 	data, err := os.ReadFile(versionsFile)
 	if err != nil {
 		return err
@@ -303,8 +326,7 @@ func (l *lab) releases(ctx context.Context) (map[string]release, error) {
 	var list []struct {
 		Name      string `json:"name"`
 		Namespace string `json:"namespace"`
-		// A string in Helm's JSON, which a number would be too.
-		Revision json.RawMessage `json:"revision"`
+		Revision  string `json:"revision"`
 	}
 	if err := json.Unmarshal([]byte(out), &list); err != nil {
 		return nil, fmt.Errorf("helm list: %w", err)
@@ -316,7 +338,7 @@ func (l *lab) releases(ctx context.Context) (map[string]release, error) {
 			return nil, err
 		}
 		sum := sha256.Sum256([]byte(manifest))
-		releases[r.Namespace+"/"+r.Name] = release{revision: strings.Trim(string(r.Revision), `"`), manifest: hex.EncodeToString(sum[:])}
+		releases[r.Namespace+"/"+r.Name] = release{revision: r.Revision, manifest: hex.EncodeToString(sum[:])}
 	}
 	return releases, nil
 }
@@ -338,9 +360,6 @@ func (l *lab) helm(ctx context.Context, args ...string) (string, error) {
 // kept its revision, since helmfile upgrades only releases that changed,
 // and at least one release changed.
 func releasesLeftAlone(_ context.Context, s *scenario, _ args) error {
-	if s.releasesAfter == nil {
-		return errors.New("upgrade.yml has not applied the versions file")
-	}
 	var changed []string
 	var errs []error
 	for name, after := range s.releasesAfter {

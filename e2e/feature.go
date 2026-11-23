@@ -20,10 +20,10 @@ import (
 // chart, and a healthy cluster with its first backup and the metrics of
 // every source. The scenario data-disk-full first gives every node a data
 // filesystem of fixed size (disks.go). The image upgrade deploys an earlier
-// versions file instead (upgradeFrom), which it writes to before.yaml. The e2e test then runs kubectl and
-// kubectl-cnpg of the versions file on this machine, and the client in a
-// container on the lab's network. It writes the run's files to
-// results/<name>/.
+// versions file instead (upgradeFrom), which it writes to before.yaml. The
+// e2e test then runs kubectl and kubectl-cnpg of the versions file on this
+// machine, and the client in a container on the lab's network. It writes the
+// run's files to results/<name>/.
 func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name string) {
 	if err := isFeatureTag(name); err != nil {
 		t.Fatal(err)

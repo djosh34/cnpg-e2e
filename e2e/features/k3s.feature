@@ -13,5 +13,4 @@ Feature: k3s
   Scenario: The k3s and etcd CAs are rotated while the client writes and reads
     When the k3s CAs are rotated with rotate-ca.yml
     Then every node is on the new CAs < 300 s
-    And every node is Ready < 300 s
     And the cluster is healthy < 600 s

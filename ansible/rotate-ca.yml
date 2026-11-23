@@ -16,11 +16,7 @@
   connection: local
   gather_facts: false
   tasks:
-    - name: Read the versions file
-      ansible.builtin.include_vars:
-        file: "{{ playbook_dir }}/../versions/versions.yaml"
-        name: versions
-
+    # download.yml read the versions file.
     - name: Download rotate-default-ca-certs.sh
       ansible.builtin.get_url:
         url: "{{ versions.k3s['rotate-ca'].url }}"

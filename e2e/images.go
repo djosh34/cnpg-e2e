@@ -17,15 +17,14 @@ import (
 // matched by repository and digest, or one of k3s's airgap images
 // (k3s.images), matched by repository and tag and imported by k3s. ms is
 // the versions file of the run, after an image upgrade also the one before:
-// the nodes keep the images of before. k3s
-// labels each image it imports from the airgap tarball with
-// io.cattle.k3s.pinned, and never one containerd pulls, so an airgap image
-// that k3s did not import fails too. An error names each other image. As an
-// import after a pull of the same tag would still carry that label, it also
-// fails when containerd's log shows a pull of an airgap image. It runs once
-// the cluster is up, before the scenario, and as the last line of
-// always.feature. seen are the tags and digests of every image it listed,
-// or its ID for an image with neither.
+// the nodes keep the images of before. k3s labels each image it imports from
+// the airgap tarball with io.cattle.k3s.pinned, and never one containerd
+// pulls, so an airgap image that k3s did not import fails too. An error
+// names each other image. As an import after a pull of the same tag would
+// still carry that label, it also fails when containerd's log shows a pull
+// of an airgap image. It runs once the cluster is up, before the scenario,
+// and as the last line of always.feature. seen are the tags and digests of
+// every image it listed, or its ID for an image with neither.
 func nodeImagesPinned(ctx context.Context, ms []*versions.Manifest) (seen []string, _ error) {
 	var errs []error
 	for i := range nodeCount {

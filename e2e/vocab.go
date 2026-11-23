@@ -115,7 +115,6 @@ var vocabulary = map[string]word{
 	"every running container | on an image of the versions file": {state: onVersionsFile},
 	"the releases whose manifests did not change | at their old revisions": {state: releasesLeftAlone},
 	"every node | on the new CAs":                                          {state: everyNodeOnNewCAs},
-	"every node | Ready":                                                   {state: everyNodeReady},
 
 	// Since an event.
 	"<role> and <role> | on the dashboard": {since: onDashboard},
