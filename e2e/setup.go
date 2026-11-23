@@ -89,7 +89,9 @@ func (s *scenario) runningCluster() error {
 	}
 	s.started = time.Now()
 	s.detail = s.cache
-	return nil
+	// The roles of the instances as the scenario starts.
+	_, err = s.role("the primary")
+	return err
 }
 
 // install fills the registry and files/ from the versions file data, then

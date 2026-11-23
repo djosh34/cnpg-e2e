@@ -1,8 +1,7 @@
-// Command client is the application outside the cluster in the e2e. It gets its own
+// Command client is the e2e's application outside the cluster. It gets its
 // certificate from the company CA by ACME, then reads and writes through
-// GORM, whose database/sql pool uses the pgx driver, on the rw port only, as
-// an application outside the cluster does, until it is killed. It prints one
-// line per event on stdout:
+// GORM with the pgx driver on the rw port only, until it is killed. It
+// prints one line per event on stdout:
 //
 //	<start unix ms> <end unix ms> <what> <address> <result> <detail>
 //

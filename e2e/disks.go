@@ -6,13 +6,8 @@ import (
 	"strconv"
 )
 
-// In the scenario data-disk-full, every node keeps its local-path volumes,
-// the instances' data and WAL, on a filesystem of fixed size, as a node's
-// data disk in production: a tmpfs of diskSize, mounted at k3s's storage
-// directory before the charts are deployed. The ballast fills it, not the
-// machine's disk. Every node gets one, since which node replica 1 runs on is
-// known only once the cluster runs. In every other scenario the volumes are
-// on a Docker volume (lab.go).
+// In data-disk-full each node keeps the instances' data on a tmpfs of
+// diskSize, as a data disk of production, which the ballast fills.
 const (
 	diskSize = 1 << 30
 	// The ballast file, next to the local-path volumes.

@@ -531,12 +531,9 @@ func (p panel) redQueries() (map[string]bool, error) {
 }
 
 // shownSince: the stat panel with the title never lost one of the pods for
-// 60 s or longer, four evaluations in a row, from from to now, evaluated
-// every 15 s as a dashboard that
-// refreshes would show it. An exporter can answer once without its query
-// metrics after a change of the Cluster, which drops the instance from one
-// evaluation; that is no gap on-call needs to see. It returns the longest
-// gap of any pod.
+// 60 s, four evaluations every 15 s in a row, from from to now. One missing
+// evaluation, as after a change of the Cluster, is no gap on-call needs to
+// see. It returns the longest gap.
 func (m *monitoring) shownSince(ctx context.Context, title string, pods []string, from time.Time) (time.Duration, error) {
 	p, err := m.statPanel(ctx, title)
 	if err != nil {

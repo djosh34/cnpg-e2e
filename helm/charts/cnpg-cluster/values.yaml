@@ -2,14 +2,14 @@
 # replication and databases come from values/cluster.yaml. The values below are
 # examples.
 
-# The instance image, by tag and digest. The e2e run sets it from the
-# manifest's postgresql.imageName (versions/).
+# The instance image, by tag and digest: postgresql.imageName of the
+# versions file.
 postgresql:
   imageName: ""
 
 cluster:
-  # The uid and gid the image names postgres. The e2e run sets them from
-  # postgresql.postgresUID and postgresGID of the versions file. CNPG writes
+  # The uid and gid the image names postgres, from postgresql.postgresUID
+  # and postgresGID of the versions file. CNPG writes
   # the name of its uid into pg_ident. Set them when the cluster is created.
   postgresUID: 999
   postgresGID: 999

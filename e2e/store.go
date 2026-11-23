@@ -157,13 +157,9 @@ func (c s3Client) want(ctx context.Context, method, path, body string, status in
 	return nil
 }
 
-// The store breaks in one of two ways. Stopped, it refuses connections: its
-// address belongs to a container that listens on no port. Paused, it takes
-// connections and never answers. Either way it keeps its files, users and
-// settings. The stand-in runs sleep of image, an image of the lab that has
-// it, on the lab's network. restoreStore removes it, and Ryuk does when the
-// test is killed, as it does the lab's containers: the stand-in has their
-// labels.
+// The store breaks in one of two ways. Stopped, it refuses connections: a
+// stand-in that listens on no port takes its address, with the labels Ryuk
+// removes. Paused, it takes connections and never answers.
 const storeGone = "s3-gone"
 
 func stopStore(ctx context.Context, network, image string) error {

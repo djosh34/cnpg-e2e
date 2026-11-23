@@ -74,14 +74,10 @@ func newCAs(ctx context.Context) (map[string]x509.VerifyOptions, error) {
 	return pools, nil
 }
 
-// everyNodeOnNewCAs: what each node serves and uses comes from the new CAs
-// (newCAs). Its API server and kubelet serve a certificate of the new
-// server CA, etcd's client and peer ports one of the new etcd server and
-// peer CAs. The node's own admin kubeconfig has a client certificate of the
-// new client CA, and the node's API server takes it. The API server's proxy
-// certificate is of the new request-header CA, and a request through it to
-// metrics-server works. A request through the API server to the node's
-// kubelet works, which needs each to take the other's new certificate.
+// everyNodeOnNewCAs: what each node serves and uses comes from the new CAs:
+// the API server, the kubelet and etcd's ports, its admin kubeconfig and
+// the API server's proxy certificate. Requests through the API server to
+// metrics-server and to the kubelet work.
 func everyNodeOnNewCAs(ctx context.Context, _ *scenario, _ args) error {
 	cas, err := newCAs(ctx)
 	if err != nil {

@@ -1,5 +1,5 @@
-# The client certificate comes from the company CA. Every metric keeps the
-# name the scrape gave it.
+# The e2e's OTel service, which the collectors in k3s send to, with mTLS by
+# the company CA. Every metric keeps the name the scrape gave it.
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
