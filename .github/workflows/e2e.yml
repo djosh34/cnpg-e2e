@@ -2,13 +2,17 @@ name: e2e
 
 # Runs scenarios by hand, each in its own job, in parallel. scenarios picks
 # some by name; empty runs every scenario: airgap, install, install-kvm,
-# restore and each scenario of e2e/features. airgap checks the nodes, the
-# controller and the fill, install installs k3s and every chart of helm/ on
-# empty nodes with ansible/install.yml, and install-kvm does the same on
-# three VMs with SELinux enforcing, under the runner's KVM. Every other
-# scenario starts a clean k3s cluster from the cache and deploys the charts
-# with ansible/upgrade.yml: restore checks just that, and each scenario of
-# e2e/features then runs its lines and always.feature. First, the images job
+# k3s-upgrade, k3s-upgrade-kvm, restore and each scenario of e2e/features.
+# airgap checks the nodes, the controller and the fill, install installs k3s
+# and every chart of helm/ on empty nodes with ansible/install.yml, and
+# k3s-upgrade installs the k3s release before, then upgrades it with
+# ansible/upgrade.yml. install-kvm and k3s-upgrade-kvm do the same on three
+# VMs with SELinux enforcing, under the runner's KVM. Every other scenario
+# starts a clean k3s cluster from the cache and deploys the charts with
+# ansible/upgrade.yml: restore checks just that, and each scenario of
+# e2e/features then runs its lines and always.feature. The image upgrade
+# among them starts from the versions file of a release, or of main's
+# history, so its job checks out the whole history. First, the images job
 # publishes the images of e2e/images that the packages do not have yet. The
 # cache job builds and publishes the cache when the packages do not have
 # it; only the scenarios that start from it wait for it. Each scenario job
@@ -45,13 +49,13 @@ jobs:
           picked=$(tr -s ', ' '\n' <<<"$WANTED" | sed '/^$/d' | sort -u)
           if [[ -z $picked ]]; then
             picked=$({
-              printf '%s\n' airgap install install-kvm restore
+              printf '%s\n' airgap install install-kvm k3s-upgrade k3s-upgrade-kvm restore
               grep -ho '^ *@[a-z0-9-]*' e2e/features/*.feature | tr -d ' @' | grep -vx always
             } | sort -u)
           fi
           # Those that start from new machines; every other one starts from
           # the cache.
-          new='airgap|install|install-kvm'
+          new='airgap|install|install-kvm|k3s-upgrade|k3s-upgrade-kvm'
           json() { jq -Rnc '[inputs | select(length > 0)]'; }
           fresh=$({ grep -xE "$new" <<<"$picked" || true; } | json)
           cached=$({ grep -vxE "$new" <<<"$picked" || true; } | json)
@@ -153,6 +157,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: ${{ matrix.scenario == 'image-upgrade' && '0' || '1' }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: e2e/go.mod
@@ -160,6 +165,8 @@ jobs:
       - name: Scenario
         env:
           SCENARIO: ${{ matrix.scenario }}
+          # For the image upgrade's list of releases.
+          GITHUB_TOKEN: ${{ matrix.scenario == 'image-upgrade' && github.token || '' }}
         run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO" -no-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}

@@ -79,6 +79,12 @@ releases:
     values:
       - values/barman-cloud.yaml
       - {{ index $v "plugin-barman-cloud" | toJson }}
+      # The chart gives the plugin its sidecar image through a ConfigMap,
+      # which the plugin reads only when it starts. A new sidecar image
+      # changes this annotation and so restarts the plugin, before pg, which
+      # needs it, restarts its instances.
+      - podAnnotations:
+          sidecar-image: {{ (index $v "plugin-barman-cloud").sidecarImage.tag | toJson }}
 
   - name: pg
     namespace: databases

@@ -11,3 +11,7 @@ dns_server: ""
 # config. Set it for the whole group nodes: download.yml reads it from the
 # first node.
 selinux: false
+
+# true restarts k3s on each node even when nothing changed, as rotate-ca.yml
+# needs, so the node makes its certificates from the new CAs.
+k3s_restart: false

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,10 +19,11 @@ import (
 // pulled or built here, then the fill and upgrade.yml, which deploys every
 // chart, and a healthy cluster with its first backup and the metrics of
 // every source. The scenario data-disk-full first gives every node a data
-// filesystem of fixed size (disks.go). The e2e test then runs kubectl and
-// kubectl-cnpg of the versions file on this machine, and the client in a
-// container on the lab's network. It writes the run's files to
-// results/<name>/.
+// filesystem of fixed size (disks.go). The image upgrade deploys an earlier
+// versions file instead (upgradeFrom), which it writes to before.yaml. The
+// e2e test then runs kubectl and kubectl-cnpg of the versions file on this
+// machine, and the client in a container on the lab's network. It writes the
+// run's files to results/<name>/.
 func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name string) {
 	if err := isFeatureTag(name); err != nil {
 		t.Fatal(err)
@@ -54,7 +56,21 @@ func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name s
 			t.Fatal(err)
 		}
 	}
-	deployed, env, err := l.deploy(ctx, m, "upgrade.yml")
+	first := m
+	var before *versions.Manifest
+	if name == imageUpgradeScenario {
+		from, data, b, err := upgradeFrom(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		logf("the image upgrade starts from the versions file of %s", from)
+		report += fmt.Sprintf("The image upgrade starts from the versions file of %s.\n", from)
+		if err := errors.Join(res.write("before.yaml", string(data)), l.useVersions(ctx, data)); err != nil {
+			t.Fatal(err)
+		}
+		first, before = b, b
+	}
+	deployed, env, err := l.deploy(ctx, first, nil, "upgrade.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +93,7 @@ func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name s
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &world{lab: l, m: m, env: env, mon: mon, built: start}
+	w := &world{lab: l, m: m, before: before, env: env, mon: mon, built: start}
 	if err := runScenario(ctx, w, name, res); err != nil {
 		t.Fatal(err)
 	}

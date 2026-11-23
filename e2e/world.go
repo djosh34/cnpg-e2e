@@ -12,14 +12,26 @@ import (
 
 // world is what a feature scenario runs on: the lab, started from the
 // cache, with every chart deployed by upgrade.yml, the versions of the run,
-// the charts' secrets that upgrade.yml got, and the monitoring.
+// the charts' secrets that upgrade.yml got, and the monitoring. In the image
+// upgrade, upgrade.yml first deployed before, the versions file it starts
+// from.
 type world struct {
-	lab *lab
-	m   *versions.Manifest
-	env map[string]string
-	mon *monitoring
+	lab    *lab
+	m      *versions.Manifest
+	before *versions.Manifest
+	env    map[string]string
+	mon    *monitoring
 
 	built time.Time // when the e2e test started to build it
+}
+
+// manifests are the versions files whose images the nodes may have: the
+// run's, and in the image upgrade the one before.
+func (w *world) manifests() []*versions.Manifest {
+	if w.before != nil {
+		return []*versions.Manifest{w.before, w.m}
+	}
+	return []*versions.Manifest{w.m}
 }
 
 // takeBackup starts a backup of the cluster to the store, through the

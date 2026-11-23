@@ -51,6 +51,11 @@ type K3s struct {
 	Airgap map[string]Download `yaml:"airgap"`
 	// The images in the tarballs, the release's k3s-images.txt.
 	Images []string `yaml:"images"`
+	// The release one minor before, which the k3s upgrade scenarios start
+	// from.
+	Previous struct {
+		Version string `yaml:"version"`
+	} `yaml:"previous"`
 }
 
 // Download is a file of a release and its sha256.
@@ -61,21 +66,14 @@ type Download struct {
 
 // Tools are the tools of the e2e test that have to match the cluster.
 type Tools struct {
-	Kubectl     Tool   `yaml:"kubectl"`
-	KubectlCNPG Tool   `yaml:"kubectl-cnpg"`
-	RotateCA    Script `yaml:"rotate-default-ca-certs.sh"`
+	Kubectl     Tool `yaml:"kubectl"`
+	KubectlCNPG Tool `yaml:"kubectl-cnpg"`
 }
 
 // Tool is a binary with the sha256 of its download for each architecture.
 type Tool struct {
 	Version string            `yaml:"version"`
 	SHA256  map[string]string `yaml:"sha256"`
-}
-
-// Script is a script of the k3s release, the same for every architecture.
-type Script struct {
-	URL    string `yaml:"url"`
-	SHA256 string `yaml:"sha256"`
 }
 
 // Chart is an upstream chart in an OCI registry: Name is the chart's own
@@ -163,8 +161,6 @@ func (m *Manifest) check() error {
 	need(sha256Hex.MatchString(m.Tools.KubectlCNPG.SHA256["amd64"]), "tools.kubectl-cnpg.sha256.amd64")
 	need(m.Tools.Kubectl.Version != "", "tools.kubectl.version")
 	need(m.Tools.KubectlCNPG.Version != "", "tools.kubectl-cnpg.version")
-	need(m.Tools.RotateCA.URL != "" && sha256Hex.MatchString(m.Tools.RotateCA.SHA256),
-		"tools.rotate-default-ca-certs.sh with url and sha256")
 	need(len(m.Charts) > 0, "charts")
 	for name, c := range m.Charts {
 		need(c.Repository != "" && exactVersion.MatchString(c.Version), "charts."+name+" with repository and an exact version")

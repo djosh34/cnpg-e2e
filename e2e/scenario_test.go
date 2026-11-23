@@ -54,4 +54,10 @@ var labScenarios = map[string]func(context.Context, *testing.T, *versions.Manife
 	installKVMScenario: func(ctx context.Context, t *testing.T, m *versions.Manifest) {
 		testInstall(ctx, t, m, true)
 	},
+	k3sUpgradeScenario: func(ctx context.Context, t *testing.T, m *versions.Manifest) {
+		testK3sUpgrade(ctx, t, m, false)
+	},
+	k3sUpgradeKVMScenario: func(ctx context.Context, t *testing.T, m *versions.Manifest) {
+		testK3sUpgrade(ctx, t, m, true)
+	},
 }

@@ -71,7 +71,7 @@ const featuresDir = "features"
 func (s *scenario) setUp(w *world, sn *godog.Scenario) error {
 	logf("scenario %q", sn.Name)
 	s.w = w
-	seen, err := nodeImagesPinned(s.ctx, w.m)
+	seen, err := nodeImagesPinned(s.ctx, w.manifests())
 	s.images = append(s.images, seen...)
 	if err != nil {
 		return err
