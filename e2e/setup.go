@@ -101,7 +101,8 @@ func (s *scenario) fromCache() (string, error) {
 
 // installSettled installs, then waits for the images of the versions file,
 // a healthy cluster, a backup of the most recent schedule and the metrics
-// of every source. CNPG can start rolling the instances after a healthy one.
+// of every source. A cached cluster can look healthy before CNPG starts
+// rolling its instances.
 func (s *scenario) installSettled() error {
 	ctx := s.ctx
 	if err := s.install(ctx, s.data); err != nil {
@@ -263,12 +264,12 @@ type container struct {
 	Image string `json:"image"`
 }
 
-// onVersionsFile: every container of a running pod, init containers
-// included, is on an image of the versions file, by the reference its pod
-// asks for: one it pins by digest, or an airgap image of k3s by tag. The
-// image ID can name another digest of the same image, such as its index's.
-// An instance that CNPG has yet to roll after an operator change differs
-// only in its init container.
+// onVersionsFile: every container of a pod that has not ended, init
+// containers included, is on an image of the versions file, by the
+// reference its pod asks for: one it pins by digest, or an airgap image of
+// k3s by tag. The image ID can name another digest of the same image, such
+// as its index's. An instance that CNPG has yet to roll after an operator
+// change differs only in its init container.
 func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	out, err := kubectl(ctx, "get", "pods", "--all-namespaces", "--output", "json")
 	if err != nil {
@@ -293,7 +294,7 @@ func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	}
 	var errs []error
 	for _, pod := range pods.Items {
-		if pod.Status.Phase != "Running" {
+		if pod.Status.Phase == "Succeeded" || pod.Status.Phase == "Failed" {
 			continue
 		}
 		for _, c := range append(pod.Spec.Containers, pod.Spec.InitContainers...) {
