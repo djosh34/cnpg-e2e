@@ -85,7 +85,7 @@ func runScenario(ctx context.Context, name string, push bool) error {
 // tearDown runs always.feature once the cluster and the client are up,
 // after a failed line once its outages ended, and keeps the client's log,
 // the nodes' logs, the timing table and the cluster's state. An error in
-// keeping them goes to s.fault, so it never fails a passed scenario.
+// keeping them goes to s.fault, which fails the run after the scenario.
 func (s *scenario) tearDown(err error) error {
 	if s.clientRan {
 		if err != nil {
