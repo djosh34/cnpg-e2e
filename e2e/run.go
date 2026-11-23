@@ -113,6 +113,9 @@ func (s *scenario) tearDown(sn *godog.Scenario, err error) error {
 		log, logErr := rawClientLog(keep)
 		fault = errors.Join(fault, logErr, s.results.write("client.log", log))
 	}
+	// The node logs before the state, which a hung API server can make
+	// take the rest of the time.
+	fault = errors.Join(fault, nodeLogs(keep, s.results))
 	table := s.table(sn.Name)
 	say(os.Stdout, "\n%s\n", table)
 	state := dumpState(keep)
@@ -127,7 +130,7 @@ func (s *scenario) tearDown(sn *godog.Scenario, err error) error {
 		slices.Sort(s.images)
 		fault = errors.Join(fault, s.results.write("images.txt", strings.Join(slices.Compact(s.images), "\n")+"\n"))
 	}
-	s.fault = errors.Join(fault, s.results.write("timing.md", table), s.results.write("state.txt", state), nodeLogs(keep, s.results))
+	s.fault = errors.Join(fault, s.results.write("timing.md", table), s.results.write("state.txt", state))
 	return err
 }
 
