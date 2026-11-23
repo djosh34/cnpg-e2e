@@ -3,13 +3,16 @@
 # and unpacks the archives. A file that is already there with its sha256 is
 # not downloaded again. Then, with regctl, it fetches the upstream charts and
 # the registry's image from their packages, each by its digest. The nodes
-# have no internet; the controller does.
+# have no internet; the controller does. With k3s_previous=true it takes the
+# files of k3s.previous, the k3s release before, which the k3s upgrade
+# scenarios install first.
 - name: Download the files of the nodes
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
     downloads: "{{ playbook_dir }}/downloads"
+    k3s_files: "{{ versions.k3s.previous if k3s_previous | default(false) | bool else versions.k3s }}"
   tasks:
     - name: Read the versions file
       ansible.builtin.include_vars:
@@ -34,9 +37,9 @@
         label: "{{ item.key }}"
       vars:
         files:
-          k3s: "{{ versions.k3s.binary.amd64 }}"
-          k3s-install.sh: "{{ versions.k3s.install }}"
-          k3s-airgap-images-amd64.tar.zst: "{{ versions.k3s.airgap.amd64 }}"
+          k3s: "{{ k3s_files.binary.amd64 }}"
+          k3s-install.sh: "{{ k3s_files.install }}"
+          k3s-airgap-images-amd64.tar.zst: "{{ k3s_files.airgap.amd64 }}"
           helm.tar.gz: "{{ versions.nodeTools.helm }}"
           helm-diff.tgz: "{{ versions.nodeTools['helm-diff'] }}"
           helmfile.tar.gz: "{{ versions.nodeTools.helmfile }}"

@@ -92,6 +92,8 @@ type scenario struct {
 	ballast  string            // the node whose data disk has the ballast file, until it is removed
 	held     *held             // the sessions held on an instance, until they are ended
 
+	releasesBefore, releasesAfter map[string]release // the Helm releases before and after the image upgrade
+
 	started time.Time       // when the scenario started, after the monitoring was ready
 	alerts  map[string]bool // the alerts the scenario names, "<alertname> <pod>": true when they must fire, false when they may
 

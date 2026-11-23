@@ -30,6 +30,26 @@ k3s:
     - docker.io/rancher/mirrored-library-traefik:3.7.15
     - docker.io/rancher/mirrored-metrics-server:v0.9.0
     - docker.io/rancher/mirrored-pause:3.10.2
+  # k3s's script that makes new CAs, each cross-signed by the old one, of
+  # the release. ansible/rotate-ca.yml runs it on the first node.
+  rotate-ca:
+    url: https://raw.githubusercontent.com/k3s-io/k3s/v1.37.2%2Bk3s1/contrib/util/rotate-default-ca-certs.sh
+    sha256: 62ef79f530cd285b3cfce884746abe6c3712ad70d0ef66e81f76aaa93c30551b
+  # The release one minor before, which the k3s upgrade scenarios install
+  # first: install.yml with k3s_previous=true copies its files.
+  previous:
+    version: "v1.36.6+k3s1"
+    binary:
+      amd64:
+        url: https://github.com/k3s-io/k3s/releases/download/v1.36.6%2Bk3s1/k3s
+        sha256: 66ceb8e67edfa547195135d74783bfadc2ecc04a91059e90ae5f70a3dbc98c15
+    install:
+      url: https://raw.githubusercontent.com/k3s-io/k3s/v1.36.6%2Bk3s1/install.sh
+      sha256: 46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad
+    airgap:
+      amd64:
+        url: https://github.com/k3s-io/k3s/releases/download/v1.36.6%2Bk3s1/k3s-airgap-images-amd64.tar.zst
+        sha256: b3029b1a682b8597587e89f5b1c48493e579a6ea1d0ec6a9aac718a8c356e5be
 
 # The SELinux policies that the playbooks install on nodes with selinux on,
 # before k3s: container-selinux of Rocky Linux 9.9 and k3s-selinux, which
@@ -56,8 +76,8 @@ nodeTools:
     sha256: 1f19ced8adb0cdf2350e94ca598cf64e390d8c21d0d9b4bdc1c9f246d4591c9d
 
 # The tools of the e2e test that have to match the cluster: kubectl of the
-# k3s release's Kubernetes version, kubectl-cnpg of the operator's version,
-# and k3s's script that makes new CAs, of the k3s release.
+# k3s release's Kubernetes version and kubectl-cnpg of the operator's
+# version.
 tools:
   kubectl:
     version: "v1.37.2"
@@ -67,9 +87,6 @@ tools:
     version: "1.30.2"
     sha256:
       amd64: a926584a2506f2beff624af03d22eb742d6227e259e364e603ea2f88a791a507
-  rotate-default-ca-certs.sh:
-    url: https://raw.githubusercontent.com/k3s-io/k3s/v1.37.2%2Bk3s1/contrib/util/rotate-default-ca-certs.sh
-    sha256: 62ef79f530cd285b3cfce884746abe6c3712ad70d0ef66e81f76aaa93c30551b
 
 # The upstream charts, as OCI charts, by version and by the digest of their
 # OCI manifest. name is the package's chart. The controller fetches each by

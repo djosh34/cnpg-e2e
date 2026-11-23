@@ -37,20 +37,9 @@ func testInstall(ctx context.Context, t *testing.T, m *versions.Manifest, vms bo
 	scenario := installScenario
 	if vms {
 		scenario = installKVMScenario
-	} else {
-		node, err := images.Get(ctx, "node")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := prepareHost(ctx, node); err != nil {
-			t.Fatal(err)
-		}
 	}
-	l, err := startLab(ctx, t, m, nil, vms)
-	if err != nil {
-		t.Fatal(err)
-	}
-	report, env, err := l.deploy(ctx, m, "install.yml")
+	l := startEmpty(ctx, t, m, vms)
+	report, env, err := l.deploy(ctx, m, nil, "install.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +61,26 @@ func testInstall(ctx context.Context, t *testing.T, m *versions.Manifest, vms bo
 	}
 	report += fmt.Sprintf("\nupgrade.yml changed nothing, in %s:\n%s\n", time.Since(start).Round(time.Second), recap(out))
 	writeReport(t, scenario, report)
+}
+
+// startEmpty starts the lab with empty nodes, or with VMs with vms. The
+// nodes need the machine's kernel readied first (prepareHost); the VMs have
+// their own.
+func startEmpty(ctx context.Context, t *testing.T, m *versions.Manifest, vms bool) *lab {
+	if !vms {
+		node, err := images.Get(ctx, "node")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := prepareHost(ctx, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l, err := startLab(ctx, t, m, nil, vms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
 }
 
 // selinuxState prints the SELinux mode of a node and the SELinux label of
@@ -104,34 +113,27 @@ func (l *lab) enforcing(ctx context.Context) (string, error) {
 	return report, nil
 }
 
-// deploy fills the registry with every image of the versions file, then
-// runs playbook, install.yml or upgrade.yml, with the charts' secrets, and
+// deploy runs apply with the charts' secrets, new ones when env is nil, and
 // waits until the cluster is healthy. It returns what it saw, and the
 // secrets, for another run of a playbook. When the playbook or the cluster
 // fails, it prints the cluster's state first.
-func (l *lab) deploy(ctx context.Context, m *versions.Manifest, playbook string) (string, map[string]string, error) {
-	start := time.Now()
-	logf("filling the registry with every image of the versions file")
-	if err := registry.Fill(ctx, registry.Client(registryAddr), m, registryAddr); err != nil {
-		return "", nil, err
+func (l *lab) deploy(ctx context.Context, m *versions.Manifest, env map[string]string, args ...string) (string, map[string]string, error) {
+	if env == nil {
+		var err error
+		if env, err = l.chartSecrets(ctx); err != nil {
+			return "", nil, err
+		}
 	}
-	report := fmt.Sprintf("The fill copied %d images in %s.\n", len(m.Pinned()), time.Since(start).Round(time.Second))
-	env, err := l.chartSecrets(ctx)
-	if err != nil {
-		return "", nil, err
-	}
-	logf("running %s", playbook)
-	start = time.Now()
 	failed := func(err error) (string, map[string]string, error) {
 		logf("%s", l.state(ctx))
 		return "", nil, err
 	}
-	out, err := l.playbook(ctx, env, playbook)
+	report, err := l.apply(ctx, m, env, args...)
 	if err != nil {
 		return failed(err)
 	}
-	report += fmt.Sprintf("\n%s took %s:\n%s\n", playbook, time.Since(start).Round(time.Second), recap(out))
-	start = time.Now()
+	playbook := args[0]
+	start := time.Now()
 	logf("waiting up to 15 min for the cluster to be healthy")
 	err = poll(ctx, time.Now().Add(15*time.Minute), l.clusterHealthy)
 	if err != nil {
@@ -148,6 +150,32 @@ func (l *lab) deploy(ctx context.Context, m *versions.Manifest, playbook string)
 	report += fmt.Sprintf("\nThe cluster was healthy, with its first backup and the metrics of every source, %s after %s.\n",
 		time.Since(start).Round(time.Second), playbook)
 	return report, env, nil
+}
+
+// apply fills the registry with every image of m, the versions file the
+// controller has, then runs ansible-playbook with args, such as install.yml
+// or upgrade.yml, and env. It returns what it saw.
+func (l *lab) apply(ctx context.Context, m *versions.Manifest, env map[string]string, args ...string) (string, error) {
+	start := time.Now()
+	logf("filling the registry with every image of the versions file")
+	if err := registry.Fill(ctx, registry.Client(registryAddr), m, registryAddr); err != nil {
+		return "", err
+	}
+	report := fmt.Sprintf("The fill copied %d images in %s.\n", len(m.Pinned()), time.Since(start).Round(time.Second))
+	run := strings.Join(args, " ")
+	logf("running %s", run)
+	start = time.Now()
+	out, err := l.playbook(ctx, env, args...)
+	if err != nil {
+		return "", err
+	}
+	return report + fmt.Sprintf("\n%s took %s:\n%s\n", run, time.Since(start).Round(time.Second), recap(out)), nil
+}
+
+// useVersions gives the controller data as its versions file, which the
+// playbooks read.
+func (l *lab) useVersions(ctx context.Context, data []byte) error {
+	return l.controller.CopyToContainer(ctx, data, controllerVersions, 0o644)
 }
 
 // chartSecrets are the company CA and the charts' secrets, as the

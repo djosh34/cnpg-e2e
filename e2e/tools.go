@@ -40,8 +40,21 @@ func installTools(ctx context.Context, m *versions.Manifest, dir string) error {
 		os.WriteFile(filepath.Join(dir, "kubectl-cnpg"), cnpg, 0o755))
 }
 
-// download fetches url and checks its sha256, trying again for up to 3 min.
+// download fetches url and checks its sha256.
 func download(ctx context.Context, url, sum string) ([]byte, error) {
+	data, err := fetch(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	got := sha256.Sum256(data)
+	if hex.EncodeToString(got[:]) != sum {
+		return nil, fmt.Errorf("%s has the sha256 %x, the versions file says %s", url, got, sum)
+	}
+	return data, nil
+}
+
+// fetch gets url, trying again for up to 3 min.
+func fetch(ctx context.Context, url string) ([]byte, error) {
 	client := &http.Client{Timeout: 5 * time.Minute}
 	var data []byte
 	err := poll(ctx, time.Now().Add(3*time.Minute), func(ctx context.Context) error {
@@ -62,14 +75,7 @@ func download(ctx context.Context, url, sum string) ([]byte, error) {
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	got := sha256.Sum256(data)
-	if hex.EncodeToString(got[:]) != sum {
-		return nil, fmt.Errorf("%s has the sha256 %x, the versions file says %s", url, got, sum)
-	}
-	return data, nil
+	return data, err
 }
 
 // fromTarGz is the file name of a tar.gz archive.

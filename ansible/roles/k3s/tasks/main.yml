@@ -149,14 +149,14 @@
 
 # systemd's start returns once k3s is ready, and k3s is ready only once its
 # etcd member is a voter, so the next node starts after this one joined.
-- name: Start k3s, or restart it when its binary, unit or a file it reads at start changed
+- name: Start k3s, or restart it when its binary, unit or a file it reads at start changed, or with k3s_restart
   ansible.builtin.systemd_service:
     name: k3s
     state: "{{ 'restarted' if restart else 'started' }}"
     enabled: true
   vars:
     restart: >-
-      {{ k3s_binary is changed or k3s_config is changed or k3s_registries is changed or k3s_resolv is changed
+      {{ k3s_restart | bool or k3s_binary is changed or k3s_config is changed or k3s_registries is changed or k3s_resolv is changed
          or k3s_unit.results | map(attribute='stat.checksum', default='') | list
             != k3s_unit_now.results | map(attribute='stat.checksum', default='') | list }}
 

@@ -95,16 +95,17 @@ func cacheRef(name, tag string) string {
 }
 
 // cacheInputs are the files besides images/ and the versions file that make
-// what the cache holds: the playbooks but the role helmfile, which the
-// cache leaves out, and the Go code that starts the lab, names its machines
-// and addresses, and sets up the store and the CA.
+// what the cache holds: the playbooks but the role helmfile and
+// rotate-ca.yml, which the cache leaves out, and the Go code that starts the
+// lab, names its machines and addresses, and sets up the store and the CA.
 var cacheInputs = []string{
 	"../ansible", "lab.go", "cache.go", "outside.go", "store.go", "ca.go", "nodes.go", "client.go",
 }
 
 // cacheTag is the tag of the cache of this checkout: a hash of the images of
-// the nodes, the store and the CA, of the versions file's k3s and nodeTools,
-// and of the files of cacheInputs.
+// the nodes, the store and the CA, of the versions file's k3s, without the
+// release before and the CA script, and nodeTools, and of the files of
+// cacheInputs.
 func cacheTag() (string, error) {
 	h := sha256.New()
 	for _, name := range []string{"node", "s3", "acme"} {
@@ -124,6 +125,10 @@ func cacheTag() (string, error) {
 	if err := yaml.Unmarshal(data, &all); err != nil {
 		return "", err
 	}
+	if k3s, ok := all["k3s"].(map[string]any); ok {
+		delete(k3s, "previous")
+		delete(k3s, "rotate-ca")
+	}
 	for _, key := range []string{"k3s", "nodeTools"} {
 		// yaml sorts the keys of a map, so the same values give the same text.
 		part, err := yaml.Marshal(all[key])
@@ -142,6 +147,9 @@ func cacheTag() (string, error) {
 			// What download.yml writes next to the playbooks.
 			if d.IsDir() && (path == "../ansible/downloads" || path == "../ansible/roles/helmfile") {
 				return fs.SkipDir
+			}
+			if path == "../ansible/rotate-ca.yml" {
+				return nil
 			}
 			if d.IsDir() {
 				return nil
@@ -298,7 +306,7 @@ func (l *lab) save(ctx context.Context, tag string) error {
 // to results/restore/report.txt.
 func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	l, report, _ := startCached(ctx, t, m)
-	deployed, _, err := l.deploy(ctx, m, "upgrade.yml")
+	deployed, _, err := l.deploy(ctx, m, nil, "upgrade.yml")
 	if err != nil {
 		t.Fatal(err)
 	}

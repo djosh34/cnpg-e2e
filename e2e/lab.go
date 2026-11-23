@@ -56,7 +56,8 @@ const (
 	// Where the controller has the checkout's ansible/, next to helm/ and
 	// versions/ as in the checkout. testcontainers copies a directory only
 	// into one that is there, such as /.
-	ansibleDir = "/ansible"
+	ansibleDir         = "/ansible"
+	controllerVersions = "/versions/versions.yaml"
 	// k3s's containerd keeps its images and snapshots here. It cannot keep
 	// them in the node's own layer, where the overlay mounts of its
 	// snapshots fail, so a volume holds them.
@@ -231,7 +232,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 			tcnetwork.WithBridgeNetwork(),
 			testcontainers.WithFiles(
 				testcontainers.ContainerFile{HostFilePath: "../ansible", ContainerFilePath: ansibleDir, FileMode: 0o755},
-				testcontainers.ContainerFile{HostFilePath: versionsFile, ContainerFilePath: "/versions/versions.yaml", FileMode: 0o644},
+				testcontainers.ContainerFile{HostFilePath: versionsFile, ContainerFilePath: controllerVersions, FileMode: 0o644},
 				testcontainers.ContainerFile{HostFilePath: "../helm", ContainerFilePath: "/helm", FileMode: 0o755},
 			),
 			// The nodes are new on every run.
