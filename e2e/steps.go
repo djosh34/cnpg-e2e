@@ -117,12 +117,12 @@ type row struct {
 func (s *scenario) beforeStep(ctx context.Context, st *godog.Step) (context.Context, error) {
 	s.kind, s.stepStart, s.detail = st.Type, time.Now(), ""
 	logf("%s %s", keyword(st.Type), st.Text)
-	if st.Type != messages.PickleStepType_CONTEXT && s.up && !s.clientRan {
+	if st.Type != messages.PickleStepType_CONTEXT && s.up && !s.clientRan && s.failure == nil {
 		logf("starting the client, writes %t", s.writes)
-		s.clientRan = true
 		if err := s.startClient(ctx); err != nil {
 			return ctx, fmt.Errorf("the client: %w", err)
 		}
+		s.clientRan = true
 	}
 	return ctx, nil
 }
@@ -135,6 +135,9 @@ func (s *scenario) afterStep(ctx context.Context, st *godog.Step, status godog.S
 		r.after = seconds(time.Since(s.marks[s.last])) + " after the " + s.last
 	}
 	s.rows = append(s.rows, r)
+	if err != nil && s.failure == nil {
+		s.failure = err
+	}
 	switch {
 	case err != nil:
 		logf("  %s in %s: %v", r.result, r.took, err)

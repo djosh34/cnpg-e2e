@@ -58,11 +58,13 @@ func runScenario(ctx context.Context, name string, push bool) error {
 			DefaultContext: ctx, Paths: []string{featuresDir}, Tags: "@" + name + " && ~@always",
 		},
 	}
-	failed := suite.Run() != 0
-	if failed && s.failure == nil {
+	if suite.Run() != 0 && s.failure == nil {
 		s.failure = errors.New("a line did not bind to exactly one step")
 	}
-	if !failed && push {
+	if s.fault != nil {
+		s.failure = errors.Join(s.failure, fmt.Errorf("keeping the run's files: %w", s.fault))
+	}
+	if s.failure == nil && push {
 		s.failure = s.save(ctx)
 	}
 	o := outcome{Name: name, Result: "passed", Cache: s.cache}
@@ -70,8 +72,8 @@ func runScenario(ctx context.Context, name string, push bool) error {
 		o.Result, o.Error = "failed", s.failure.Error()
 	}
 	out, err := yaml.Marshal(o)
-	if err := errors.Join(err, res.write("report.yaml", string(out)), s.fault); err != nil {
-		return fmt.Errorf("keeping the run's files: %w", errors.Join(err, s.failure))
+	if err := errors.Join(err, res.write("report.yaml", string(out))); err != nil {
+		return errors.Join(err, s.failure)
 	}
 	if s.failure != nil {
 		return s.failure

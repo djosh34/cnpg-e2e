@@ -103,9 +103,10 @@ func startLab(ctx context.Context, m *versions.Manifest, vms bool, from *cached)
 		return nil, err
 	}
 	node := ""
-	if vms {
+	switch {
+	case vms:
 		node, err = build(ctx, "vm", "BASE="+lab.VM, "DISK_URL="+lab.VMDisk.URL, "DISK_SHA256="+lab.VMDisk.SHA256)
-	} else {
+	case from == nil:
 		node, err = build(ctx, "node", "BASE="+lab.Node)
 	}
 	if err != nil {

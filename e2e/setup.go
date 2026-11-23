@@ -30,61 +30,25 @@ func (s *scenario) emptyMachines(vms bool) error {
 }
 
 // runningCluster: "Given a running cluster": the cache of the merge base
-// with main, or when it is missing or does not come up, empty nodes; then
-// install.yml, and a cluster that is healthy, has its backup of the most
-// recent schedule and the metrics of every source.
+// with main, caught up by install.yml, or, when that fails, a new install
+// on empty nodes. Either way the cluster is healthy, has its backup of the
+// most recent schedule and the metrics of every source.
 func (s *scenario) runningCluster() error {
-	ctx := s.ctx
-	start := time.Now()
-	commit, err := mergeBase(ctx)
-	var c *cached
+	commit, err := s.fromCache()
 	if err == nil {
-		c, err = pull(ctx, commit)
-	}
-	if err == nil {
-		logf("starting from the cache of %s", commit)
-		if s.lab, err = startLab(ctx, s.m, false, c); err == nil {
-			err = s.lab.writeKubeconfig(ctx)
-			if err == nil {
-				err = ready(ctx, start)
-			}
-			if err != nil {
-				err = errors.Join(fmt.Errorf("the restored cluster: %w", err), s.lab.close(ctx))
-			}
+		s.cache = "used " + commit + "; the row written before the save: " + s.detail
+	} else {
+		if s.lab != nil {
+			err = errors.Join(err, s.lab.close(s.ctx))
 		}
-	}
-	if err != nil {
 		s.cache = "not used: " + oneLine(err.Error())
 		logf("the cache is %s", s.cache)
-		if s.lab, err = startLab(ctx, s.m, false, nil); err != nil {
+		s.up = false
+		if s.lab, err = startLab(s.ctx, s.m, false, nil); err != nil {
 			return err
 		}
-	} else {
-		s.cache = "used " + commit
-	}
-	if err := s.install(ctx, s.data); err != nil {
-		return err
-	}
-	logf("waiting for a healthy cluster, its backup and the metrics of every source")
-	err = poll(ctx, time.Now().Add(15*time.Minute), func(ctx context.Context) error { return healthy(ctx, clusterName) })
-	if err != nil {
-		return err
-	}
-	err = poll(ctx, time.Now().Add(10*time.Minute), func(ctx context.Context) error {
-		return errors.Join(backedUp(ctx), s.lab.mon.everySource(ctx))
-	})
-	if err != nil {
-		return err
-	}
-	if c != nil && strings.HasPrefix(s.cache, "used") {
-		primary, err := clusterStatus(ctx, clusterName, "currentPrimary")
-		if err == nil {
-			var row string
-			row, err = psql(ctx, primary, "postgres", "select commit || ' ' || saved from e2e_cache")
-			s.cache += "; the row written before the save: " + row
-		}
-		if err != nil {
-			s.cache += "; the row written before the save: " + oneLine(err.Error())
+		if err := s.installSettled(); err != nil {
+			return err
 		}
 	}
 	s.started = time.Now()
@@ -92,6 +56,64 @@ func (s *scenario) runningCluster() error {
 	// The roles of the instances as the scenario starts.
 	_, err = s.role("the primary")
 	return err
+}
+
+// fromCache starts the cluster from the cache, installs on it, and reads
+// the row the save wrote, which must name the commit.
+func (s *scenario) fromCache() (string, error) {
+	ctx := s.ctx
+	start := time.Now()
+	commit, err := mergeBase(ctx)
+	if err != nil {
+		return "", err
+	}
+	c, err := pull(ctx, commit)
+	if err != nil {
+		return "", err
+	}
+	logf("starting from the cache of %s", commit)
+	if s.lab, err = startLab(ctx, s.m, false, c); err != nil {
+		return "", err
+	}
+	if err := s.lab.writeKubeconfig(ctx); err != nil {
+		return "", err
+	}
+	if err := ready(ctx, start); err != nil {
+		return "", fmt.Errorf("the restored cluster: %w", err)
+	}
+	if err := s.installSettled(); err != nil {
+		return "", err
+	}
+	primary, err := clusterStatus(ctx, clusterName, "currentPrimary")
+	if err != nil {
+		return "", err
+	}
+	row, err := psql(ctx, primary, "postgres", "select commit || ' ' || saved from e2e_cache")
+	if err != nil {
+		return "", fmt.Errorf("the row written before the save: %w", err)
+	}
+	if !strings.HasPrefix(row, commit+" ") {
+		return "", fmt.Errorf("the row written before the save is %q, not of %s", row, commit)
+	}
+	s.detail = row
+	return commit, nil
+}
+
+// installSettled installs, then waits for a healthy cluster, a backup of
+// the most recent schedule and the metrics of every source.
+func (s *scenario) installSettled() error {
+	ctx := s.ctx
+	if err := s.install(ctx, s.data); err != nil {
+		return err
+	}
+	logf("waiting for a healthy cluster, its backup and the metrics of every source")
+	err := poll(ctx, time.Now().Add(15*time.Minute), func(ctx context.Context) error { return healthy(ctx, clusterName) })
+	if err != nil {
+		return err
+	}
+	return poll(ctx, time.Now().Add(10*time.Minute), func(ctx context.Context) error {
+		return errors.Join(backedUp(ctx), s.lab.mon.everySource(ctx))
+	})
 }
 
 // install fills the registry and files/ from the versions file data, then

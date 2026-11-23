@@ -1,5 +1,5 @@
 # A node: Rocky Linux 9 with systemd and sshd, as a machine of production.
-# k3s-killall.sh needs ps, k3s's CA script openssl, Ansible's unarchive tar.
+# k3s-killall.sh needs ps, k3s's CA script openssl, the helmfile role tar.
 ARG BASE
 FROM ${BASE}
 RUN dnf install -y --setopt=install_weak_deps=False systemd openssh-server iproute procps-ng openssl tar \

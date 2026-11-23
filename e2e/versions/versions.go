@@ -236,6 +236,9 @@ func Update(data []byte, move func(Pin) (Pin, error)) ([]byte, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, err
 	}
+	if len(doc.Content) == 0 {
+		return nil, errors.New("an empty versions file")
+	}
 	sites, _ := imageSites(&doc)
 	charts := fields(doc.Content[0])["charts"]
 	if charts == nil {

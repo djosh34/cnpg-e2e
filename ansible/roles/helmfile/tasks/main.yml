@@ -20,8 +20,8 @@
     dest: /root/.local/share/helm/plugins/
     mode: preserve
 
-# helm/ and the versions file, as fill packed them. A new archive replaces
-# the old directory, so nothing removed from helm/ stays on the node.
+# helm/ and the versions file, as fill packed them, unpacked anew on every
+# run, so nothing removed from helm/ stays on the node.
 - name: Copy the charts
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../files/helm.tar"
@@ -30,26 +30,9 @@
   register: charts
   run_once: true
 
-- name: Remove the charts of before
-  ansible.builtin.file:
-    path: /opt/deploy
-    state: absent
-  when: charts is changed
-  run_once: true
-
-- name: Make the directory of the charts
-  ansible.builtin.file:
-    path: /opt/deploy
-    state: directory
-    mode: "0755"
-  run_once: true
-
 - name: Unpack the charts
-  ansible.builtin.unarchive:
-    src: /opt/helm.tar
-    dest: /opt/deploy
-    remote_src: true
-  when: charts is changed
+  ansible.builtin.shell: rm -rf /opt/deploy && mkdir /opt/deploy && tar -xf /opt/helm.tar -C /opt/deploy
+  changed_when: charts is changed
   run_once: true
 
 - name: Check that every secret is set
