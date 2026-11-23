@@ -124,7 +124,7 @@ prepull:
 # The instance image, which the cnpg-cluster chart reads. It names postgres
 # 70, so the cluster gets that uid and gid.
 postgresql:
-  imageName: ghcr.io/djosh34/cnpg-e2e/postgres:18.7-debian13@sha256:c10fed18bc412ce45b7381ef13b40bc3f4461b84a73d7766ce82b260413dc69b
+  imageName: ghcr.io/djosh34/cnpg-e2e/postgres:18.7-debian13@sha256:598e8de5b927a839809075288a916bc425dba6eacc5851b057e2e113c91f3176
   postgresUID: 70
   postgresGID: 70
 
@@ -177,7 +177,7 @@ plugin-barman-cloud:
   sidecarImage:
     registry: ghcr.io
     repository: djosh34/cnpg-e2e/cloudnative-pg-plugin-barman-cloud-sidecar
-    tag: "0.16.0@sha256:d389ad25d9bb9a92eb0f6262618551a8ac9b1b149df73e8ce584fb18392719e9"
+    tag: "0.16.0@sha256:745556e2271bcba06ca1379588342ab5e68e173c886213be596cfc2647b6a238"
 
 # The two collectors, the releases otel-agent and otel-cluster, both of the
 # opentelemetry-collector chart, on DHI's contrib build. The chart starts
