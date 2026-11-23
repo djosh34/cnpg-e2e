@@ -10,7 +10,6 @@
 # the tarball's images: those of the release's k3s-images.txt.
 k3s:
   version: "v1.37.2+k3s1"
-  image: rancher/k3s:v1.37.2-k3s1@sha256:21ea6e0fac4e3930c2ce8aa40ddd41a8b18cb3e9a0222c030dc005e7e88c4332
   binary:
     amd64:
       url: https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s

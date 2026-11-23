@@ -42,9 +42,8 @@ jobs:
           WANTED: ${{ inputs.scenarios }}
         run: |
           set -euo pipefail
-          if [[ -n $WANTED ]]; then
-            picked=$(tr -s ', ' '\n' <<<"$WANTED" | sed '/^$/d' | sort -u)
-          else
+          picked=$(tr -s ', ' '\n' <<<"$WANTED" | sed '/^$/d' | sort -u)
+          if [[ -z $picked ]]; then
             picked=$({
               printf '%s\n' airgap install install-kvm restore
               grep -ho '^ *@[a-z0-9-]*' e2e/features/*.feature | tr -d ' @' | grep -vx always
