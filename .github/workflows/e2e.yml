@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   cache:
-    if: github.event_name == 'push' || inputs.scenarios == 'cache'
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     permissions:
@@ -72,8 +72,10 @@ jobs:
       - id: list
         env:
           SCENARIOS: ${{ !inputs.nightly && inputs.scenarios || '' }}
-        # Unquoted, so each name is an argument.
-        run: echo "scenarios=$(go run ./e2e list $SCENARIOS)" >>"$GITHUB_OUTPUT"
+        # Unquoted, so each name is an argument; an unknown one fails.
+        run: |
+          scenarios=$(go run ./e2e list $SCENARIOS)
+          echo "scenarios=$scenarios" >>"$GITHUB_OUTPUT"
 
   mirror:
     if: github.event_name == 'schedule' || inputs.nightly
