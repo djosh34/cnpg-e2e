@@ -110,7 +110,10 @@ func (s *scenario) install(ctx context.Context, data []byte) error {
 	if err := s.lab.writeKubeconfig(ctx); err != nil {
 		return err
 	}
-	if !s.up {
+	if s.up {
+		// An upgrade rolls the instances, so the primary changes.
+		s.primaryOut = true
+	} else {
 		s.up, s.started = true, time.Now()
 	}
 	return nil
@@ -227,18 +230,18 @@ func onK3s(ctx context.Context, s *scenario, _ args) error {
 	return nil
 }
 
-type containerStatus struct {
-	Name    string `json:"name"`
-	Image   string `json:"image"`
-	ImageID string `json:"imageID"`
-	State   struct {
+type container struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	State struct {
 		Running *struct{} `json:"running"`
 	} `json:"state"`
 }
 
 // onVersionsFile: every running container runs an image of the versions
-// file: one it pins, by the digest of its image ID, or an airgap image of
-// k3s, by its tag.
+// file, by the reference its pod asks for: one it pins by digest, or an
+// airgap image of k3s by tag. The image ID can name another digest of the
+// same image, such as its index's.
 func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	out, err := kubectl(ctx, "get", "pods", "--all-namespaces", "--output", "json")
 	if err != nil {
@@ -247,9 +250,13 @@ func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	var pods struct {
 		Items []struct {
 			Metadata struct{ Namespace, Name string } `json:"metadata"`
-			Status   struct {
-				ContainerStatuses     []containerStatus `json:"containerStatuses"`
-				InitContainerStatuses []containerStatus `json:"initContainerStatuses"`
+			Spec     struct {
+				Containers     []container `json:"containers"`
+				InitContainers []container `json:"initContainers"`
+			} `json:"spec"`
+			Status struct {
+				ContainerStatuses     []container `json:"containerStatuses"`
+				InitContainerStatuses []container `json:"initContainerStatuses"`
 			} `json:"status"`
 		} `json:"items"`
 	}
@@ -262,12 +269,17 @@ func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	}
 	var errs []error
 	for _, pod := range pods.Items {
+		images := map[string]string{}
+		for _, c := range append(pod.Spec.Containers, pod.Spec.InitContainers...) {
+			images[c.Name] = c.Image
+		}
 		// A sidecar, such as barman-cloud's, is an init container that runs.
 		for _, c := range append(pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses...) {
-			name, digest, _ := strings.Cut(c.ImageID, "@")
+			image := images[c.Name]
+			name, digest, _ := strings.Cut(image, "@")
 			if c.State.Running != nil && !slices.Contains(s.m.Pinned, versions.Repository(name)+"@"+digest) &&
-				!slices.Contains(airgap, versions.Reference(c.Image)) {
-				errs = append(errs, fmt.Errorf("%s of %s/%s runs %s (%s)", c.Name, pod.Metadata.Namespace, pod.Metadata.Name, c.Image, c.ImageID))
+				!slices.Contains(airgap, versions.Reference(image)) {
+				errs = append(errs, fmt.Errorf("%s of %s/%s runs %s", c.Name, pod.Metadata.Namespace, pod.Metadata.Name, image))
 			}
 		}
 	}
