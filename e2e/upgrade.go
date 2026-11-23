@@ -210,9 +210,17 @@ func upgradeFrom(ctx context.Context) (string, []byte, *versions.Manifest, error
 	return from, data, before, nil
 }
 
-// deploys is what the image upgrade deploys of a versions file: the images
-// and charts it pins.
-func deploys(m *versions.Manifest) string { return fmt.Sprint(m.Images(), m.Charts) }
+// deploys is what the image upgrade deploys of a versions file: each image
+// and chart it pins, by repository and digest. Tags and chart versions are
+// only names.
+func deploys(m *versions.Manifest) string {
+	charts := make([]string, 0, len(m.Charts))
+	for _, c := range m.Charts {
+		charts = append(charts, c.Repository+"/"+c.Name+"@"+c.Digest)
+	}
+	slices.Sort(charts)
+	return fmt.Sprint(m.Pinned(), charts)
+}
 
 // withK3s is the versions file data with the k3s of the versions file
 // current.
