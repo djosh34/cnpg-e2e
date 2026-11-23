@@ -24,6 +24,37 @@
     dest: "{{ deploy_dir }}/helm/upstream/"
     mode: "0644"
 
+# So a file gone from the checkout, such as a chart's template, is gone on
+# the node too, and a running cluster gets what a new one gets.
+- name: List the files of helm/ on the controller
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../helm"
+    recurse: true
+  delegate_to: localhost
+  register: helm_files
+
+- name: List the upstream charts on the controller
+  ansible.builtin.find:
+    paths: "{{ downloads }}/charts"
+  delegate_to: localhost
+  register: chart_files
+
+- name: List the files of helm/ on the node
+  ansible.builtin.find:
+    paths: "{{ deploy_dir }}/helm"
+    recurse: true
+  register: node_files
+
+- name: Remove the files the checkout does not have
+  ansible.builtin.file:
+    path: "{{ deploy_dir }}/helm/{{ item }}"
+    state: absent
+  loop: "{{ node_files.files | map(attribute='path') | map('relpath', deploy_dir ~ '/helm') | difference(wanted) }}"
+  vars:
+    wanted: >-
+      {{ helm_files.files | map(attribute='path') | map('relpath', playbook_dir ~ '/../helm') | list
+         + chart_files.files | map(attribute='path') | map('basename') | map('regex_replace', '^', 'upstream/') | list }}
+
 - name: Copy the versions file
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../versions/versions.yaml"
@@ -40,13 +71,13 @@
 # values, secrets included, to files for helm, under TMPDIR: a directory of
 # /run, a tmpfs, that only root can read, and it deletes them after each
 # helm call. Its own output shows no secret: helm-diff hides the content of
-# Secrets.
+# Secrets. It exits with 2 when it changed a release.
 - name: Apply every chart
   ansible.builtin.shell: |
     set -eu
     umask 077
     mkdir -p /run/helmfile
-    TMPDIR=/run/helmfile helmfile --file helmfile.yaml.gotmpl --no-color apply --skip-diff-on-install --suppress-secrets
+    TMPDIR=/run/helmfile helmfile --file helmfile.yaml.gotmpl --no-color apply --skip-diff-on-install --suppress-secrets --detailed-exitcode
   args:
     chdir: "{{ deploy_dir }}/helm"
   environment: "{{ dict(helmfile_env | zip(query('ansible.builtin.env', *helmfile_env))) | combine(fixed) }}"
@@ -58,7 +89,7 @@
   register: apply
   no_log: true
   failed_when: false
-  changed_when: (apply.stdout ~ apply.stderr) is search('(Updated|Reinstalled|Deleted) Releases')
+  changed_when: apply.rc == 2
 
 - name: Show what helmfile did
   ansible.builtin.debug:
@@ -66,6 +97,6 @@
 
 - name: Check that helmfile succeeded
   ansible.builtin.assert:
-    that: apply.rc == 0
+    that: apply.rc in [0, 2]
     fail_msg: helmfile apply exited with {{ apply.rc }}
     quiet: true

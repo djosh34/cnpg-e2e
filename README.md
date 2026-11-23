@@ -5,12 +5,12 @@ A three-node k3s cluster with CloudNativePG, and an e2e runner that breaks it in
 ## Run a scenario
 
 ```bash
-go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario switchover
+go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario install
 ```
 
 - **Needs** an amd64 machine with Go and a Docker that allows privileged containers. A run first loads the kernel module `br_netfilter` on the machine and raises its `fs.inotify.max_user_instances` to 1024, from a privileged container.
 - **Results** go to `results/`. The test passes when the scenario passed.
-- **Scenarios** are the tags in `e2e/features/`. `always.feature` runs after each one.
+- **Scenarios** are `airgap`, `install`, `restore` and `cache` below, and the tags in `e2e/features/`, after each of which `always.feature` runs. Those of the feature files get no charts yet, so they fail until they start from the cache like `restore`.
 
 `go -C e2e test ./...` without `-scenario` runs the unit tests only and starts no container.
 
