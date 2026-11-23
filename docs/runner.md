@@ -38,13 +38,13 @@ The cache is one image per container: a clean k3s cluster that `install.yml --sk
 
 `data-disk-full` fills a node's data disk, so there every node gets a tmpfs of 1 GiB for its database volumes. Every other scenario keeps them on a Docker volume.
 
-`image-upgrade` first deploys an earlier versions file: the `versions.yaml` of the newest release that has one, or before such a release, the newest other version of `versions/versions.yaml` in the history of `origin/main`. It needs a clone with that history. It keeps the checkout's k3s, which takes no downgrade. Then `upgrade.yml` applies the checkout's versions file. It checks that every running container moves to an image of that file and that releases whose manifests did not change keep their revision. Its image check accepts the images of both files.
+`image-upgrade` first deploys an earlier versions file. That is the `versions.yaml` of the newest release that has one and is not a nightly's prerelease. When there is none, or it is the checkout's file, it is the newest other version of `versions/versions.yaml` in the history of `origin/main`, so the scenario needs a clone with that history. A nightly's file is never the start, because a pull request's file can be older than last night's. It keeps the checkout's k3s, which takes no downgrade. Then `upgrade.yml` applies the checkout's versions file. It checks that every running container moves to an image of that file and that releases whose manifests did not change keep their revision. Its image check accepts the images of both files.
 
 `ca-rotation` runs `rotate-ca.yml` and checks that every node serves and uses certificates of the new CAs.
 
 ## On GitHub
 
-The `e2e` workflow runs each scenario in its own job, in parallel. It runs every scenario on each pull request. By hand, it runs the scenarios its input `scenarios` names, or every scenario when the input is empty. Its first job publishes the images of `e2e/images/` that are new. The cache job publishes the cache when it is new, and only the scenarios that start from the cache wait for it. Each scenario job uploads `results/`.
+The `e2e` workflow runs each scenario in its own job, in parallel. It runs every scenario on each pull request. By hand, it runs the scenarios its input `scenarios` names, or every scenario when the input is empty. Its first job publishes the images of `e2e/images/` that are new. The cache job publishes the cache when it is new, and only the scenarios that start from the cache wait for it. A pull request from a fork may not push packages, so there each scenario job builds what the packages lack. Each scenario job uploads `results/`.
 
 The `ci` workflow runs lint and unit tests on every pull request. The `mirror` workflow runs `cmd/mirror` by hand ([the fill](fill.md)).
 
@@ -55,7 +55,7 @@ The `e2e` workflow also runs every night at 03:23 UTC, and by hand with its inpu
 1. It logs in to Docker Hardened Images with the repository secrets `DHI_USERNAME` and `DHI_TOKEN`.
 2. It runs `cmd/mirror -latest`, which copies the newest images and charts into this repo's packages and writes a new versions file. That file keeps `k3s.previous` and every download.
 3. It runs every scenario on that versions file.
-4. It publishes a release `nightly-<run id>.<attempt>` with two files, also when scenarios failed: `versions.yaml` and `report.yaml`.
+4. It publishes a prerelease `nightly-<run id>.<attempt>` with two files, also when scenarios failed: `versions.yaml` and `report.yaml`.
 
 `report.yaml` names the commit, the run and the result of each scenario:
 
@@ -68,4 +68,4 @@ scenarios:
     job: https://github.com/djosh34/cnpg-e2e/actions/runs/1/job/2
 ```
 
-The result is `passed`, `failed`, or `skipped` when a job before the scenario failed. The nightly changes nothing in the repository.
+The result is `passed`, `failed`, or `skipped` when a job before the scenario failed. The nightly pushes no commit.

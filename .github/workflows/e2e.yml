@@ -116,8 +116,11 @@ jobs:
           path: versions/versions.yaml
           if-no-files-found: error
 
+  # A pull request from a fork has no right to push packages, so it skips
+  # images and cache, and its scenario jobs build what the packages lack.
   images:
     name: Publish the images
+    if: ${{ !github.event.pull_request.head.repo.fork }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -138,15 +141,15 @@ jobs:
           docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<<"$TOKEN"
           go -C e2e run ./cmd/images
 
-  # One cache publisher at a time, across branches: a second one waits,
-  # then finds the cache the first pushed under the same tag.
+  # One cache publisher at a time, across branches: the others wait in
+  # turn, then find the cache the first pushed under the same tag.
   cache:
     name: Publish the cache
     needs: [plan, images]
-    if: needs.plan.outputs.cached != '[]'
+    if: ${{ !failure() && !cancelled() && needs.plan.outputs.cached != '[]' && !github.event.pull_request.head.repo.fork }}
     concurrency:
       group: e2e-cache
-      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -203,7 +206,8 @@ jobs:
           path: results/
           if-no-files-found: error
 
-  # These pull the cache the cache job published: -no-build.
+  # These pull the cache the cache job published: -no-build. Without the
+  # cache job, on a fork, each builds the cache when it is missing.
   cached:
     name: ${{ matrix.scenario }}
     needs: [plan, cache, mirror]
@@ -234,7 +238,12 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
           # For the image upgrade's list of releases.
           GITHUB_TOKEN: ${{ matrix.scenario == 'image-upgrade' && github.token || '' }}
-        run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO" -no-build
+          CACHE: ${{ needs.cache.result }}
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ $CACHE == success ]]; then flags+=(-no-build); fi
+          go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO" "${flags[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:

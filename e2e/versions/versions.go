@@ -293,10 +293,7 @@ func (w *images) visit(n *yaml.Node, path string) {
 			w.visit(c, fmt.Sprintf("%s[%d]", path, i))
 		}
 	case yaml.MappingNode:
-		fields := map[string]*yaml.Node{}
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			fields[n.Content[i].Value] = n.Content[i+1]
-		}
+		fields := fields(n)
 		if repo := scalar(fields["repository"]); repo != "" {
 			if registry := scalar(fields["registry"]); registry != "" {
 				repo = registry + "/" + repo
@@ -335,31 +332,28 @@ func scalar(n *yaml.Node) string {
 	return n.Value
 }
 
-// chartSites are where the manifest pins its charts: the version and digest
-// of each, as a Pin of its OCI repository and name.
+// fields are the values of a mapping node by their keys.
+func fields(n *yaml.Node) map[string]*yaml.Node {
+	f := map[string]*yaml.Node{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		f[n.Content[i].Value] = n.Content[i+1]
+	}
+	return f
+}
+
+// chartSites are where the manifest, a document Parse took, pins its
+// charts: the version and digest of each, as a Pin of its OCI repository
+// and name.
 func chartSites(doc *yaml.Node) []site {
 	var sites []site
-	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
-		return nil
-	}
-	root := doc.Content[0]
-	for i := 0; i+1 < len(root.Content); i += 2 {
-		if root.Content[i].Value != "charts" {
-			continue
-		}
-		charts := root.Content[i+1]
-		for j := 1; j < len(charts.Content); j += 2 {
-			fields := map[string]*yaml.Node{}
-			c := charts.Content[j]
-			for k := 0; k+1 < len(c.Content); k += 2 {
-				fields[c.Content[k].Value] = c.Content[k+1]
-			}
-			repo := strings.TrimPrefix(scalar(fields["repository"]), "oci://") + "/" + scalar(fields["name"])
-			sites = append(sites, site{
-				pin: Pin{Repository: repo, Tag: scalar(fields["version"]), Digest: scalar(fields["digest"])},
-				tag: fields["version"], digest: fields["digest"],
-			})
-		}
+	charts := fields(doc.Content[0])["charts"]
+	for i := 1; i < len(charts.Content); i += 2 {
+		f := fields(charts.Content[i])
+		repo := strings.TrimPrefix(scalar(f["repository"]), "oci://") + "/" + scalar(f["name"])
+		sites = append(sites, site{
+			pin: Pin{Repository: repo, Tag: scalar(f["version"]), Digest: scalar(f["digest"])},
+			tag: f["version"], digest: f["digest"],
+		})
 	}
 	return sites
 }

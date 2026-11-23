@@ -37,7 +37,7 @@ const (
 )
 
 // The releases of this repo. The nightly puts its versions file into its
-// release as the asset versions.yaml.
+// prerelease as the asset versions.yaml, and so does each code release.
 const (
 	releasesURL   = "https://api.github.com/repos/djosh34/cnpg-e2e/releases?per_page=100"
 	versionsAsset = "versions.yaml"
@@ -164,10 +164,12 @@ func containersOn(pods string, m *versions.Manifest) error {
 }
 
 // upgradeFrom is the versions file the image upgrade starts from: the
-// versions.yaml of the newest release that has one, or before such a
-// release, the newest version of versions/versions.yaml in main's history
-// that differs from the checkout's: on a pull request that changes it,
-// main's own, and on main the one before. It keeps the k3s of the checkout's
+// versions.yaml of the newest code release that has one, or when there is
+// none or it is the checkout's, the newest version of
+// versions/versions.yaml in main's history that differs from the
+// checkout's: on a pull request that changes it, main's own, and on main
+// the one before. Not a nightly's: a pull request's file can be older than
+// last night's, and the scenario would downgrade. It keeps the k3s of the checkout's
 // versions file: the scenario upgrades images, and k3s takes no downgrade.
 // It returns where it is from, its content and what it pins.
 func upgradeFrom(ctx context.Context) (string, []byte, *versions.Manifest, error) {
@@ -176,7 +178,7 @@ func upgradeFrom(ctx context.Context) (string, []byte, *versions.Manifest, error
 		return "", nil, nil, err
 	}
 	from, data, err := newestRelease(ctx)
-	if err == nil && data == nil {
+	if err == nil && (data == nil || strings.TrimSpace(string(data)) == strings.TrimSpace(string(current))) {
 		from, data, err = previousOnMain(ctx, current)
 	}
 	if err != nil {
@@ -210,8 +212,8 @@ func withK3s(data, current []byte) ([]byte, error) {
 }
 
 // newestRelease is the asset versions.yaml of the newest release of this
-// repo that has one, and where it is from, or nothing when no release has
-// one. The releases are public. GITHUB_TOKEN, when set, raises the API's
+// repo that has one and is no prerelease, and where it is from, or nothing
+// when no such release has one. The releases are public. GITHUB_TOKEN, when set, raises the API's
 // rate limit.
 func newestRelease(ctx context.Context) (string, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
@@ -223,8 +225,9 @@ func newestRelease(ctx context.Context) (string, []byte, error) {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	var releases []struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
+		TagName    string `json:"tag_name"`
+		Prerelease bool   `json:"prerelease"`
+		Assets     []struct {
 			Name string `json:"name"`
 			URL  string `json:"browser_download_url"`
 		} `json:"assets"`
@@ -233,6 +236,9 @@ func newestRelease(ctx context.Context) (string, []byte, error) {
 		return "", nil, err
 	}
 	for _, r := range releases {
+		if r.Prerelease {
+			continue
+		}
 		for _, a := range r.Assets {
 			if a.Name == versionsAsset {
 				data, err := fetch(ctx, a.URL)

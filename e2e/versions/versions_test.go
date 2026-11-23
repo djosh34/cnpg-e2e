@@ -1,6 +1,7 @@
 package versions
 
 import (
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -214,19 +215,19 @@ func TestUpdate(t *testing.T) {
 			t.Errorf("no image %s", want)
 		}
 	}
-	// The chart's version and digest, the controller's tag and digest, the
-	// postgres and CNPG strings, and each collector's tag and digest.
+	// Every line that changed has a new tag or digest, and only those.
 	before, after := strings.Split(string(data), "\n"), strings.Split(string(out), "\n")
 	if len(before) != len(after) {
 		t.Fatalf("%d lines, then %d", len(before), len(after))
 	}
-	changed := 0
 	for i := range before {
-		if before[i] != after[i] {
-			changed++
+		if before[i] == after[i] {
+			continue
 		}
-	}
-	if changed != 10 {
-		t.Errorf("%d lines changed, want 10:\n%s", changed, out)
+		if !slices.ContainsFunc(slices.Collect(maps.Values(moves)), func(p Pin) bool {
+			return strings.Contains(after[i], p.Tag) || strings.Contains(after[i], p.Digest)
+		}) {
+			t.Errorf("line %d changed to %q", i+1, after[i])
+		}
 	}
 }
