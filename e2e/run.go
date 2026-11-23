@@ -53,10 +53,12 @@ func runScenario(ctx context.Context, w *world, name string, res *results) error
 		return fmt.Errorf("no scenario has the tag @%s", name)
 	case ran > 1:
 		return fmt.Errorf("%d scenarios have the tag @%s; a run runs one", ran, name)
-	case s.fault != nil:
-		return fmt.Errorf("the run could not keep its files: %w", s.fault)
+	case status != 0 && s.fault != nil:
+		return fmt.Errorf("the scenario %s failed, and the run could not keep its files: %w", name, s.fault)
 	case status != 0:
 		return fmt.Errorf("the scenario %s failed", name)
+	case s.fault != nil:
+		return fmt.Errorf("the run could not keep its files: %w", s.fault)
 	}
 	logf("PASSED: %s", name)
 	return nil
