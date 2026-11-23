@@ -108,8 +108,8 @@ charts:
   opentelemetry-collector:
     name: opentelemetry-collector-chart
     repository: oci://ghcr.io/djosh34/cnpg-e2e
-    version: "0.180.0"
-    digest: sha256:6ad21aa35bd7f3c699690656fbde7f5b9845bb7f5d869d593f5f5a8a324b6cb0
+    version: "0.182.0"
+    digest: sha256:2b535b9ec030a3659fcf6c51279aa4d6ff292dc936aaccc378a28cbbbb1b506d
   plugin-barman-cloud:
     name: plugin-barman-cloud
     repository: oci://ghcr.io/djosh34/cnpg-e2e
