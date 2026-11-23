@@ -29,12 +29,13 @@ import (
 // The lab is what the e2e test starts on the machine's own Docker, with only
 // Go and Docker: the services outside k3s, three nodes and the controller,
 // each a container at a fixed address on one network with no route to the
-// internet. The machine itself reaches them on that network, and the
-// controller also has a network to the internet, as the machine that runs
-// Ansible in production. The images are this repo's packages, or built here
-// where a package does not have one yet (images.Get). testcontainers removes
-// every container and the network when the test ends, and Ryuk does when the
-// test is killed.
+// internet. In the KVM scenarios each node is a VM in its container, which
+// takes the container's address (images/vm). The machine itself reaches
+// them on that network, and the controller also has a network to the
+// internet, as the machine that runs Ansible in production. The images are
+// this repo's packages, or built here where a package does not have one yet
+// (images.Get). testcontainers removes every container and the network when
+// the test ends, and Ryuk does when the test is killed.
 const (
 	// The writable registry that the fill copies the images into, on the
 	// store's registry bucket, which the registry of every node reads too.
@@ -83,13 +84,18 @@ http:
 
 // The inventory of the controller's Ansible: the nodes by name and address,
 // and the lab's DNS for k3s, since the nodes' own resolv.conf names
-// Docker's resolver on their loopback.
-func inventory() string {
+// Docker's resolver on their loopback. VMs, which have SELinux enforcing,
+// get selinux on.
+func inventory(vms bool) string {
 	lines := []string{"[nodes]"}
 	for i := range nodeCount {
 		lines = append(lines, nodeHost(i)+" ansible_host="+nodeIP(i))
 	}
-	return strings.Join(append(lines, "", "[nodes:vars]", "ansible_user=root", "dns_server="+dnsIP), "\n") + "\n"
+	lines = append(lines, "", "[nodes:vars]", "ansible_user=root", "dns_server="+dnsIP)
+	if vms {
+		lines = append(lines, "selinux=true")
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 type lab struct {
@@ -108,8 +114,9 @@ type lab struct {
 // every node takes. Without a cache the nodes are empty and the store and
 // the company CA new. From a cache the store, the CA and the nodes are its
 // images: the CA's root is the cache's, OpenBao is unsealed with its key,
-// and the store and the CA get new TLS certificates.
-func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cache) (*lab, error) {
+// and the store and the CA get new TLS certificates. With vms the nodes are
+// new VMs, never from a cache.
+func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cache, vms bool) (*lab, error) {
 	l := &lab{t: t, containers: map[string]*testcontainers.DockerContainer{}}
 	// The image of each container: the cache's where it holds the
 	// container, else this repo's image of its kind.
@@ -119,6 +126,9 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 	}
 	for i := range nodeCount {
 		kinds[nodeName(i)] = "node"
+		if vms {
+			kinds[nodeName(i)] = "vm"
+		}
 	}
 	image := map[string]string{}
 	var err error
@@ -169,6 +179,14 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 		return nil, err
 	}
 	for i := range nodeCount {
+		if vms {
+			node, err := l.runVM(ctx, i, image[nodeName(i)], authorized)
+			if err != nil {
+				return nil, err
+			}
+			l.nodes = append(l.nodes, node)
+			continue
+		}
 		node, err := l.run(ctx, labContainer{
 			name: nodeName(i), ip: nodeIP(i), image: image[nodeName(i)],
 			secrets: map[string]string{"/root/.ssh/authorized_keys": authorized},
@@ -198,7 +216,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 	}
 	l.controller, err = l.run(ctx, labContainer{
 		name: "controller", ip: controllerIP, image: image["controller"], dockerDNS: true,
-		files:   map[string]string{"/etc/ansible/hosts": inventory()},
+		files:   map[string]string{"/etc/ansible/hosts": inventory(vms)},
 		secrets: map[string]string{"/root/.ssh/id_ed25519": key},
 		opts: []testcontainers.ContainerCustomizer{
 			// To the internet, for the downloads of the playbooks.
@@ -234,6 +252,66 @@ func sshKey() (private, authorized string, _ error) {
 		return "", "", err
 	}
 	return string(pem.EncodeToMemory(block)), string(ssh.MarshalAuthorizedKey(sshPub)), nil
+}
+
+// What a VM prints on its serial console once cloud-init gave root the
+// controller's key and sshd runs.
+const vmUp = "e2e: the VM is up"
+
+// runVM starts node i as a VM in a container of image, of images/vm, and
+// waits until the VM is up. Its cloud-init seed gives it the node's name and
+// address, a default route through the network's gateway as a machine of
+// production has, the lab's DNS, and root the controller's key.
+func (l *lab) runVM(ctx context.Context, i int, image, authorized string) (*testcontainers.DockerContainer, error) {
+	mac := fmt.Sprintf("52:54:00:00:00:%02x", netip.MustParseAddr(nodeIP(i)).As4()[3])
+	userData := `#cloud-config
+disable_root: false
+ssh_authorized_keys:
+  - ` + strings.TrimSpace(authorized) + `
+runcmd:
+  - "until systemctl is-active --quiet sshd; do sleep 1; done; echo '` + vmUp + `' >/dev/ttyS0"
+`
+	networkConfig := fmt.Sprintf(`version: 2
+ethernets:
+  eth0:
+    match:
+      macaddress: "%s"
+    set-name: eth0
+    addresses: [%s/%d]
+    routes:
+      - to: default
+        via: %s
+    nameservers:
+      addresses: [%s]
+`, mac, nodeIP(i), netip.MustParsePrefix(subnet).Bits(), gatewayIP, dnsIP)
+	return l.run(ctx, labContainer{
+		name: nodeName(i), ip: nodeIP(i), image: image,
+		files: map[string]string{
+			"/seed/meta-data":      "instance-id: " + nodeName(i) + "\nlocal-hostname: " + nodeName(i) + "\n",
+			"/seed/user-data":      userData,
+			"/seed/network-config": networkConfig,
+		},
+		opts: []testcontainers.ContainerCustomizer{
+			testcontainers.WithEnv(map[string]string{"MAC": mac}),
+			testcontainers.WithHostConfigModifier(func(h *moby.HostConfig) {
+				h.Privileged = true
+				h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeVolume, Target: "/disk"})
+			}),
+			testcontainers.WithWaitStrategy(wait.ForLog(vmUp).WithStartupTimeout(5 * time.Minute)),
+		},
+	})
+}
+
+// onNode runs a command on node i over SSH from the controller, as Ansible
+// reaches the nodes, and returns its exit code and its output, stdout and
+// stderr together. The exit code is 255 when SSH fails.
+func (l *lab) onNode(ctx context.Context, i int, cmd ...string) (int, string, error) {
+	quoted := make([]string, len(cmd))
+	for j, arg := range cmd {
+		quoted[j] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+	}
+	return execIn(ctx, l.controller, []string{"ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "root@" + nodeIP(i), strings.Join(quoted, " ")})
 }
 
 // runACME starts the company CA and sets it up, or unseals the cache's.

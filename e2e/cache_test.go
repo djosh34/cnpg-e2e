@@ -215,7 +215,7 @@ func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag str
 		if err := prepareHost(ctx, node); err != nil {
 			t.Fatal(err)
 		}
-		l, err := startLab(ctx, t, m, nil)
+		l, err := startLab(ctx, t, m, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -309,7 +309,7 @@ func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	l, err := startLab(ctx, t, m, from)
+	l, err := startLab(ctx, t, m, from, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,27 @@
 # an image archive that changed needs no restart: k3s takes it when the file
 # changes. Last, once every node runs, it makes CoreDNS one pod per node.
 
+# With selinux on, the SELinux policies of containers and of k3s go first,
+# from the controller, since the nodes have no internet. Their install
+# labels the k3s directories, so what the tasks below make or copy there
+# gets the policy's labels, and k3s runs in its own domain.
+- name: Copy the SELinux policies
+  ansible.builtin.copy:
+    src: "{{ downloads }}/{{ item }}.rpm"
+    dest: /var/cache/k3s-selinux/
+    mode: "0644"
+  loop: [container-selinux, k3s-selinux]
+  when: selinux | bool
+
+- name: Install the SELinux policies, with every repository off
+  ansible.builtin.dnf:
+    name:
+      - /var/cache/k3s-selinux/container-selinux.rpm
+      - /var/cache/k3s-selinux/k3s-selinux.rpm
+    disablerepo: "*"
+    state: present
+  when: selinux | bool
+
 - name: Make the directories of k3s
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -57,7 +78,7 @@
 # the first node cluster-init, on every other the first node to join.
 - name: Write config.yaml
   ansible.builtin.copy:
-    content: "{{ shared | combine(own, join, dns) | to_nice_yaml(indent=2) }}"
+    content: "{{ shared | combine(own, join, dns, labels) | to_nice_yaml(indent=2) }}"
     dest: /etc/rancher/k3s/config.yaml
     mode: "0600"
   vars:
@@ -70,6 +91,7 @@
          {'server': 'https://' ~ hostvars[first].ansible_default_ipv4.address ~ ':6443',
           'token': k3s_token.content | b64decode | trim} }}
     dns: "{{ {'resolv-conf': '/etc/rancher/k3s/resolv.conf'} if dns_server else {} }}"
+    labels: "{{ {'selinux': true} if selinux | bool else {} }}"
   register: k3s_config
   no_log: true
 

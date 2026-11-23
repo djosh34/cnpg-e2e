@@ -123,7 +123,12 @@ var labScenarios = map[string]func(context.Context, *testing.T, *versions.Manife
 	airgapScenario:  testAirgap,
 	cacheScenario:   testCache,
 	restoreScenario: testRestore,
-	installScenario: testInstall,
+	installScenario: func(ctx context.Context, t *testing.T, m *versions.Manifest) {
+		testInstall(ctx, t, m, false)
+	},
+	installKVMScenario: func(ctx context.Context, t *testing.T, m *versions.Manifest) {
+		testInstall(ctx, t, m, true)
+	},
 }
 
 // hostSetup loads br_netfilter, which the nodes need and cannot load

@@ -26,7 +26,7 @@ const internet = "1.1.1.1:443"
 // every image of the versions file. It writes what it saw to
 // results/airgap/report.txt.
 func testAirgap(ctx context.Context, t *testing.T, m *versions.Manifest) {
-	l, err := startLab(ctx, t, m, nil)
+	l, err := startLab(ctx, t, m, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,6 +41,18 @@
           helm-diff.tgz: "{{ versions.nodeTools['helm-diff'] }}"
           helmfile.tar.gz: "{{ versions.nodeTools.helmfile }}"
 
+    # Only for nodes with selinux on: see roles/k3s.
+    - name: Download the SELinux policies
+      ansible.builtin.get_url:
+        url: "{{ item.value.url }}"
+        dest: "{{ downloads }}/{{ item.key }}.rpm"
+        checksum: "sha256:{{ item.value.sha256 }}"
+        mode: "0644"
+      loop: "{{ versions.selinux | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      when: hostvars[groups['nodes'][0]].selinux | default(false) | bool
+
     - name: Unpack Helm, its diff plugin and helmfile
       ansible.builtin.unarchive:
         src: "{{ downloads }}/{{ item }}.{{ 'tgz' if item == 'helm-diff' else 'tar.gz' }}"
