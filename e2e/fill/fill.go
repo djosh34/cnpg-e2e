@@ -93,20 +93,23 @@ func Run(ctx context.Context, data []byte, host string, plainHTTP bool) error {
 }
 
 // Download fetches d into file and checks its sha256, unless file has it
-// already. A failed GET is tried again, up to five times: hosts such as
-// raw.githubusercontent.com answer 503 now and then.
+// already. A GET that gets no answer or a server error is tried up to five
+// times in ten minutes: hosts such as raw.githubusercontent.com answer 503
+// now and then.
 func Download(ctx context.Context, d versions.Download, file string) error {
 	if data, err := os.ReadFile(file); err == nil && sum(data) == d.SHA256 {
 		return nil
 	}
-	data, err := get(ctx, d.URL)
-	for try := 1; err != nil && try < 5; try++ {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	data, status, err := get(ctx, d.URL)
+	for try := 1; err != nil && status/100 != 4 && try < 5; try++ {
 		select {
 		case <-ctx.Done():
 			return errors.Join(err, ctx.Err())
 		case <-time.After(time.Duration(try) * 5 * time.Second):
 		}
-		data, err = get(ctx, d.URL)
+		data, status, err = get(ctx, d.URL)
 	}
 	if err != nil {
 		return err
@@ -117,24 +120,21 @@ func Download(ctx context.Context, d versions.Download, file string) error {
 	return os.WriteFile(file, data, 0o644)
 }
 
-func get(ctx context.Context, url string) ([]byte, error) {
+// get returns the body of url, or the status of an answer other than 200.
+func get(ctx context.Context, url string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err := errors.Join(err, resp.Body.Close()); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+		return nil, resp.StatusCode, errors.Join(fmt.Errorf("GET %s: %s", url, resp.Status), resp.Body.Close())
 	}
-	return data, nil
+	data, err := io.ReadAll(resp.Body)
+	return data, 0, errors.Join(err, resp.Body.Close())
 }
 
 func sum(data []byte) string {
