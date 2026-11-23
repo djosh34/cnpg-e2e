@@ -10,7 +10,8 @@ Feature: Switchover
   @quiet-rewind
   Scenario: A switchover with no writes
     A former primary that rewinds onto an idle primary can wait for that
-    primary's next WAL record. One write ends the wait.
+    primary's next WAL record. One write ends the wait; the instance is
+    ready at its next readiness probe, which runs every 10 s.
 
     Given a running cluster
     And no writes
@@ -18,4 +19,4 @@ Feature: Switchover
     Then replica 1 is primary < 300 s
     When 600 s pass
     And a row is written
-    Then the cluster is healthy < 10 s
+    Then the cluster is healthy < 20 s

@@ -99,15 +99,22 @@ func (s *scenario) fromCache() (string, error) {
 	return commit, nil
 }
 
-// installSettled installs, then waits for a healthy cluster, a backup of
-// the most recent schedule and the metrics of every source.
+// installSettled installs, then waits for the images of the versions file,
+// a healthy cluster, a backup of the most recent schedule and the metrics
+// of every source. A cached cluster can look healthy before CNPG starts
+// rolling its instances.
 func (s *scenario) installSettled() error {
 	ctx := s.ctx
 	if err := s.install(ctx, s.data); err != nil {
 		return err
 	}
-	logf("waiting for a healthy cluster, its backup and the metrics of every source")
-	err := poll(ctx, time.Now().Add(15*time.Minute), func(ctx context.Context) error { return healthy(ctx, clusterName) })
+	logf("waiting for the versions file, a healthy cluster, its backup and the metrics of every source")
+	err := poll(ctx, time.Now().Add(15*time.Minute), func(ctx context.Context) error {
+		if err := onVersionsFile(ctx, s, args{}); err != nil {
+			return err
+		}
+		return healthy(ctx, clusterName)
+	})
 	if err != nil {
 		return err
 	}
@@ -255,15 +262,14 @@ func onK3s(ctx context.Context, s *scenario, _ args) error {
 type container struct {
 	Name  string `json:"name"`
 	Image string `json:"image"`
-	State struct {
-		Running *struct{} `json:"running"`
-	} `json:"state"`
 }
 
-// onVersionsFile: every running container runs an image of the versions
-// file, by the reference its pod asks for: one it pins by digest, or an
-// airgap image of k3s by tag. The image ID can name another digest of the
-// same image, such as its index's.
+// onVersionsFile: every container of a pod that has not ended, init
+// containers included, is on an image of the versions file, by the
+// reference its pod asks for: one it pins by digest, or an airgap image of
+// k3s by tag. The image ID can name another digest of the same image, such
+// as its index's. An instance that CNPG has yet to roll after an operator
+// change differs only in its init container.
 func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	out, err := kubectl(ctx, "get", "pods", "--all-namespaces", "--output", "json")
 	if err != nil {
@@ -276,10 +282,7 @@ func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 				Containers     []container `json:"containers"`
 				InitContainers []container `json:"initContainers"`
 			} `json:"spec"`
-			Status struct {
-				ContainerStatuses     []container `json:"containerStatuses"`
-				InitContainerStatuses []container `json:"initContainerStatuses"`
-			} `json:"status"`
+			Status struct{ Phase string } `json:"status"`
 		} `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(out), &pods); err != nil {
@@ -291,17 +294,14 @@ func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	}
 	var errs []error
 	for _, pod := range pods.Items {
-		images := map[string]string{}
-		for _, c := range append(pod.Spec.Containers, pod.Spec.InitContainers...) {
-			images[c.Name] = c.Image
+		if pod.Status.Phase == "Succeeded" || pod.Status.Phase == "Failed" {
+			continue
 		}
-		// A sidecar, such as barman-cloud's, is an init container that runs.
-		for _, c := range append(pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses...) {
-			image := images[c.Name]
-			name, digest, _ := strings.Cut(image, "@")
-			if c.State.Running != nil && !slices.Contains(s.m.Pinned, versions.Repository(name)+"@"+digest) &&
-				!slices.Contains(airgap, versions.Reference(image)) {
-				errs = append(errs, fmt.Errorf("%s of %s/%s runs %s", c.Name, pod.Metadata.Namespace, pod.Metadata.Name, image))
+		for _, c := range append(pod.Spec.Containers, pod.Spec.InitContainers...) {
+			name, digest, _ := strings.Cut(c.Image, "@")
+			if !slices.Contains(s.m.Pinned, versions.Repository(name)+"@"+digest) &&
+				!slices.Contains(airgap, versions.Reference(c.Image)) {
+				errs = append(errs, fmt.Errorf("%s of %s/%s is on %s", c.Name, pod.Metadata.Namespace, pod.Metadata.Name, c.Image))
 			}
 		}
 	}
