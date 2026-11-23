@@ -114,6 +114,16 @@ func (l *lab) k3sOn(ctx context.Context, version string) error {
 	return nil
 }
 
+// containerStatus is the status of a container of a pod.
+type containerStatus struct {
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	ImageID string `json:"imageID"`
+	State   struct {
+		Running *struct{} `json:"running"`
+	} `json:"state"`
+}
+
 // containersOn checks that every running container of pods, the JSON of
 // kubectl get pods, runs an image of m: one it pins, by the repository and
 // digest that the container's image ID names, or one of its airgap images,
@@ -126,14 +136,8 @@ func containersOn(pods string, m *versions.Manifest) error {
 				Name      string `json:"name"`
 			} `json:"metadata"`
 			Status struct {
-				ContainerStatuses []struct {
-					Name    string `json:"name"`
-					Image   string `json:"image"`
-					ImageID string `json:"imageID"`
-					State   struct {
-						Running *struct{} `json:"running"`
-					} `json:"state"`
-				} `json:"containerStatuses"`
+				ContainerStatuses     []containerStatus `json:"containerStatuses"`
+				InitContainerStatuses []containerStatus `json:"initContainerStatuses"`
 			} `json:"status"`
 		} `json:"items"`
 	}
@@ -144,7 +148,8 @@ func containersOn(pods string, m *versions.Manifest) error {
 	pinned, airgap := pinnedImages(ms), airgapImages(ms)
 	var errs []error
 	for _, pod := range list.Items {
-		for _, c := range pod.Status.ContainerStatuses {
+		// A sidecar, such as barman-cloud's, is an init container that runs.
+		for _, c := range append(pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses...) {
 			if c.State.Running == nil {
 				continue
 			}
@@ -159,27 +164,21 @@ func containersOn(pods string, m *versions.Manifest) error {
 }
 
 // upgradeFrom is the versions file the image upgrade starts from: the
-// versions.yaml of the newest release that has one whose images differ from
-// those of m, else the newest version of versions/versions.yaml in the
-// checkout's history that does, with the k3s of the checkout's versions
-// file: the scenario upgrades images, and k3s takes no downgrade. It
-// returns where it is from, its content and what it pins. Before the first
-// release, on a pull request that pins new images, that is the versions file
-// of main.
-func upgradeFrom(ctx context.Context, m *versions.Manifest) (string, []byte, *versions.Manifest, error) {
-	releases, err := releaseVersions(ctx)
-	if err != nil {
-		return "", nil, nil, err
-	}
-	history, err := historyVersions(ctx)
-	if err != nil {
-		return "", nil, nil, err
-	}
-	from, data, err := firstOther(ctx, m, append(releases, history...))
-	if err != nil {
-		return "", nil, nil, err
-	}
+// versions.yaml of the newest release that has one, or before such a
+// release, the newest version of versions/versions.yaml in main's history
+// that differs from the checkout's: on a pull request that changes it,
+// main's own, and on main the one before. It keeps the k3s of the checkout's
+// versions file: the scenario upgrades images, and k3s takes no downgrade.
+// It returns where it is from, its content and what it pins.
+func upgradeFrom(ctx context.Context) (string, []byte, *versions.Manifest, error) {
 	current, err := os.ReadFile(versionsFile)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	from, data, err := newestRelease(ctx)
+	if err == nil && data == nil {
+		from, data, err = previousOnMain(ctx, current)
+	}
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -187,7 +186,10 @@ func upgradeFrom(ctx context.Context, m *versions.Manifest) (string, []byte, *ve
 		return "", nil, nil, fmt.Errorf("the versions file of %s: %w", from, err)
 	}
 	before, err := versions.Parse(data)
-	return from, data, before, err
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("the versions file of %s: %w", from, err)
+	}
+	return from, data, before, nil
 }
 
 // withK3s is the versions file data with the k3s of the versions file
@@ -204,40 +206,14 @@ func withK3s(data, current []byte) ([]byte, error) {
 	return yaml.Marshal(file)
 }
 
-// versionsSource is a versions file to start the image upgrade from: where
-// it is from, and how to read it.
-type versionsSource struct {
-	name string
-	read func(context.Context) ([]byte, error)
-}
-
-// firstOther is the first versions file of sources whose images differ from
-// those of m.
-func firstOther(ctx context.Context, m *versions.Manifest, sources []versionsSource) (string, []byte, error) {
-	for _, s := range sources {
-		data, err := s.read(ctx)
-		if err != nil {
-			return "", nil, fmt.Errorf("the versions file of %s: %w", s.name, err)
-		}
-		before, err := versions.Parse(data)
-		if err != nil {
-			return "", nil, fmt.Errorf("the versions file of %s: %w", s.name, err)
-		}
-		if !slices.Equal(before.Pinned(), m.Pinned()) {
-			return s.name, data, nil
-		}
-	}
-	return "", nil, errors.New("no release and no earlier versions/versions.yaml of the checkout pins other images; " +
-		"a shallow clone has no history: git fetch --unshallow")
-}
-
-// releaseVersions are the versions files of this repo's releases, newest
-// first: the asset versions.yaml of each release that has one. The
-// releases are public. GITHUB_TOKEN, when set, raises the API's rate limit.
-func releaseVersions(ctx context.Context) ([]versionsSource, error) {
+// newestRelease is the asset versions.yaml of the newest release of this
+// repo that has one, and where it is from, or nothing when no release has
+// one. The releases are public. GITHUB_TOKEN, when set, raises the API's
+// rate limit.
+func newestRelease(ctx context.Context) (string, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
@@ -251,36 +227,40 @@ func releaseVersions(ctx context.Context) ([]versionsSource, error) {
 		} `json:"assets"`
 	}
 	if err := callJSON(&http.Client{Timeout: time.Minute}, req, &releases); err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	var sources []versionsSource
 	for _, r := range releases {
 		for _, a := range r.Assets {
 			if a.Name == versionsAsset {
-				sources = append(sources, versionsSource{name: "the release " + r.TagName, read: func(ctx context.Context) ([]byte, error) {
-					return fetch(ctx, a.URL)
-				}})
+				data, err := fetch(ctx, a.URL)
+				return "the release " + r.TagName, data, err
 			}
 		}
 	}
-	return sources, nil
+	return "", nil, nil
 }
 
-// historyVersions are the versions of versions/versions.yaml in the
-// checkout's history, newest first.
-func historyVersions(ctx context.Context) ([]versionsSource, error) {
-	out, err := command(ctx, "git", "-C", "..", "log", "--format=%H", "--", "versions/versions.yaml")
+// main as a clone of this repo has it.
+const mainBranch = "origin/main"
+
+// previousOnMain is the newest version of versions/versions.yaml in main's
+// history that differs from current, and where it is from.
+func previousOnMain(ctx context.Context, current []byte) (string, []byte, error) {
+	out, err := command(ctx, "git", "-C", "..", "log", "--format=%H", mainBranch, "--", "versions/versions.yaml")
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	var sources []versionsSource
 	for _, commit := range strings.Fields(out) {
-		sources = append(sources, versionsSource{name: "the commit " + commit, read: func(ctx context.Context) ([]byte, error) {
-			data, err := command(ctx, "git", "-C", "..", "show", commit+":versions/versions.yaml")
-			return []byte(data + "\n"), err
-		}})
+		data, err := command(ctx, "git", "-C", "..", "show", commit+":versions/versions.yaml")
+		if err != nil {
+			return "", nil, err
+		}
+		if strings.TrimSpace(data) != strings.TrimSpace(string(current)) {
+			return "the commit " + commit + " of main", []byte(data + "\n"), nil
+		}
 	}
-	return sources, nil
+	return "", nil, fmt.Errorf("no release has a versions file, and %s has no other versions/versions.yaml; "+
+		"a shallow clone has no history: git fetch --unshallow origin main", mainBranch)
 }
 
 // upgradeImages: upgrade.yml applies the checkout's versions file, after
@@ -295,11 +275,12 @@ func upgradeImages(ctx context.Context, s *scenario, _ args) error {
 	if s.releasesBefore, err = l.releases(ctx); err != nil {
 		return err
 	}
+	if s.primaryBefore, err = primaryPod(ctx); err != nil {
+		return err
+	}
 	if err := l.useVersions(ctx, data); err != nil {
 		return err
 	}
-	// CNPG may restart every instance on a new image, the primary last.
-	s.primaryOut = true
 	report, err := l.apply(ctx, s.w.m, s.w.env, "upgrade.yml")
 	if err != nil {
 		return err
@@ -357,8 +338,7 @@ func (l *lab) helm(ctx context.Context, args ...string) (string, error) {
 }
 
 // releasesLeftAlone: each release whose manifest the upgrade did not change
-// kept its revision, since helmfile upgrades only releases that changed,
-// and at least one release changed.
+// kept its revision, since helmfile upgrades only releases that changed.
 func releasesLeftAlone(_ context.Context, s *scenario, _ args) error {
 	var changed []string
 	var errs []error
@@ -376,20 +356,40 @@ func releasesLeftAlone(_ context.Context, s *scenario, _ args) error {
 			errs = append(errs, fmt.Errorf("the release %s is gone", name))
 		}
 	}
-	if len(changed) == 0 {
-		errs = append(errs, errors.New("the upgrade changed no release"))
-	}
 	slices.Sort(changed)
 	s.detail = "changed: " + strings.Join(changed, ", ")
 	return errors.Join(errs...)
 }
 
 // onVersionsFile: every running container of the cluster runs an image of
-// the checkout's versions file.
+// the checkout's versions file. Once it does, a primary that changed or
+// restarted on the way makes reading take the limit of writing.
 func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	pods, err := kubectl(ctx, "get", "pods", "--all-namespaces", "--output", "json")
 	if err != nil {
 		return err
 	}
-	return containersOn(pods, s.w.m)
+	if err := containersOn(pods, s.w.m); err != nil {
+		return err
+	}
+	primary, err := primaryPod(ctx)
+	if err != nil {
+		return err
+	}
+	if primary != s.primaryBefore {
+		s.primaryOut = true
+		s.detail = "the primary changed or restarted"
+	}
+	return nil
+}
+
+// primaryPod is the cluster's primary and the UID of its pod, which a
+// restart changes.
+func primaryPod(ctx context.Context) (string, error) {
+	primary, err := clusterStatus(ctx, clusterName, "currentPrimary")
+	if err != nil {
+		return "", err
+	}
+	uid, err := kubectl(ctx, "get", "pod", primary, "-n", namespace, "-o", "jsonpath={.metadata.uid}")
+	return primary + " " + uid, err
 }

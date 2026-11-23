@@ -1,13 +1,12 @@
 Feature: Image upgrade
   The scenario starts from an earlier versions file: the versions.yaml of the
-  newest release that has one whose images differ from the checkout's, else
-  the newest such version of versions/versions.yaml in the checkout's
-  history, with the checkout's k3s. upgrade.yml deployed every chart with
-  it. Then upgrade.yml takes
-  the checkout's versions file, as production takes a new one: helmfile
-  upgrades only the releases whose manifests changed, and their workloads
-  roll to the new images. The nodes keep the images of before, so the image
-  check takes both versions files.
+  newest release that has one, or before such a release, the newest version
+  of versions/versions.yaml in main's history that differs from the
+  checkout's, with the checkout's k3s. upgrade.yml deployed every chart with
+  it. Then upgrade.yml takes the checkout's versions file, as production
+  takes a new one: helmfile upgrades only the releases whose manifests
+  changed, and their workloads roll to the new images. The nodes keep the
+  images of before, so the image check takes both versions files.
 
   Background:
     Given the cluster is healthy

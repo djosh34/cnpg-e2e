@@ -59,7 +59,7 @@ func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name s
 	first := m
 	var before *versions.Manifest
 	if name == imageUpgradeScenario {
-		from, data, b, err := upgradeFrom(ctx, m)
+		from, data, b, err := upgradeFrom(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}

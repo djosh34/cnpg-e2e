@@ -11,8 +11,8 @@ name: e2e
 # starts a clean k3s cluster from the cache and deploys the charts with
 # ansible/upgrade.yml: restore checks just that, and each scenario of
 # e2e/features then runs its lines and always.feature. The image upgrade
-# among them starts from an earlier versions file of a release or of the
-# history, so those jobs check out the whole history. First, the images job
+# among them starts from the versions file of a release, or of main's
+# history, so its job checks out the whole history. First, the images job
 # publishes the images of e2e/images that the packages do not have yet. The
 # cache job builds and publishes the cache when the packages do not have
 # it; only the scenarios that start from it wait for it. Each scenario job
@@ -157,7 +157,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: ${{ matrix.scenario == 'image-upgrade' && '0' || '1' }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: e2e/go.mod
@@ -166,7 +166,7 @@ jobs:
         env:
           SCENARIO: ${{ matrix.scenario }}
           # For the image upgrade's list of releases.
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ matrix.scenario == 'image-upgrade' && github.token || '' }}
         run: go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO" -no-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
