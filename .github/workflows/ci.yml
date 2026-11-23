@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   # golangci-lint v2.15.0 with no nolint comment, and shellcheck on the
-  # runner's scripts.
+  # scripts of the e2e test's images.
   lint:
     runs-on: ubuntu-24.04
     steps:
@@ -51,7 +51,7 @@ jobs:
           "$RUNNER_TEMP/golangci-lint" config verify
           "$RUNNER_TEMP/golangci-lint" run ./...
       - name: shellcheck
-        run: shellcheck e2e/*.sh e2e/images/*/*.sh
+        run: shellcheck e2e/images/*/*.sh
 
   # go vet and go test. Without -scenario, TestScenario skips, so no
   # container starts.

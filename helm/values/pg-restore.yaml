@@ -1,0 +1,16 @@
+# The values of the release pg-restore, on top of cluster.yaml and pg.yaml:
+# a second cluster that restores the backups and WAL of the cluster pg from
+# the store, with Secrets of its own names, so both releases can be in one
+# namespace. It has no LoadBalancer: 5432 of the nodes serves pg.
+cluster:
+  name: pg-restore
+caSecret: pg-restore-ca
+rwLoadBalancer: null
+recovery:
+  enabled: true
+  sourceCluster: pg
+objectStore:
+  credentialsSecret: pg-restore-backup-creds
+  endpointCA:
+    name: pg-restore-ca
+    key: ca.crt

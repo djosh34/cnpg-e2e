@@ -1,8 +1,0 @@
-# Only what e2e/Dockerfile copies. It is the only image built from the
-# repository root.
-*
-!e2e/
-# TestScenario copies these in when the container starts.
-e2e/features/
-# The build needs no tests.
-e2e/**/*_test.go

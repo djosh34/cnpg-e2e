@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -112,10 +112,6 @@ func TestLookup(t *testing.T) {
 	key, a, err = s.lookup("1229 MB of WAL", "written on the primary")
 	if err != nil || key != "<n> MB of WAL | written on <role>" || len(a.ns) != 1 || a.ns[0] != 1229 || a.pods[0] != "pg-1" {
 		t.Errorf("1229 MB of WAL is written on the primary: got %q %v %v %v", key, a.ns, a.pods, err)
-	}
-	key, a, err = s.lookup("k3s", "restarted on node 2")
-	if err != nil || key != "k3s | restarted on node <n>" || len(a.ns) != 1 || a.ns[0] != 2 {
-		t.Errorf("k3s is restarted on node 2: got %q %v %v", key, a.ns, err)
 	}
 }
 
@@ -323,5 +319,17 @@ func TestAlertLabels(t *testing.T) {
 	}
 	if got := selector(labels); got != `{alertname="A", cluster="pg", pod=""}` {
 		t.Errorf("selector: %s", got)
+	}
+}
+
+// Only a scenario's tag of the feature files names a feature scenario.
+func TestIsFeatureTag(t *testing.T) {
+	if err := isFeatureTag("switchover"); err != nil {
+		t.Error(err)
+	}
+	for _, name := range []string{"always", "switchove", "../switchover", "rollout"} {
+		if isFeatureTag(name) == nil {
+			t.Errorf("%q is a feature tag", name)
+		}
 	}
 }

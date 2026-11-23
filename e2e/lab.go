@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -37,6 +37,9 @@ import (
 // (images.Get). testcontainers removes every container and the network when
 // the test ends, and Ryuk does when the test is killed.
 const (
+	// The lab's network, and the machine's own address on it.
+	subnet    = "10.77.0.0/24"
+	gatewayIP = "10.77.0.1"
 	// The writable registry that the fill copies the images into, on the
 	// store's registry bucket, which the registry of every node reads too.
 	registryIP     = "10.77.0.21"
@@ -62,6 +65,9 @@ const (
 )
 
 var registryAddr = registryIP + ":5000"
+
+// The versions file of the checkout.
+const versionsFile = "../versions/versions.yaml"
 
 // The writable registry's config: the registry bucket over the store's
 // TLS, which it trusts through SSL_CERT_FILE, and no redirects, so its
@@ -105,8 +111,9 @@ type lab struct {
 	bao        *openbao
 	nodes      []*testcontainers.DockerContainer
 	controller *testcontainers.DockerContainer
-	// Every container by its name.
+	// Every container by its name, and the image of each.
 	containers map[string]*testcontainers.DockerContainer
+	images     map[string]string
 }
 
 // startLab starts the lab: the services outside k3s, set up and answering,
@@ -131,6 +138,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 		}
 	}
 	image := map[string]string{}
+	l.images = image
 	var err error
 	for name, kind := range kinds {
 		if from != nil && from.images[name] != "" {
@@ -564,4 +572,26 @@ func (l *lab) printLog(name string, c *testcontainers.DockerContainer) {
 		lines = append(lines, err.Error())
 	}
 	l.t.Logf("the end of the log of %s:\n%s", name, strings.Join(lines, "\n"))
+}
+
+// hostSetup loads br_netfilter, which the nodes need and cannot load
+// themselves, and raises fs.inotify.max_user_instances to 1024: the limit
+// is the machine's, for every container alike, many machines have 128, and
+// each node takes many.
+const hostSetup = `set -eu
+modprobe br_netfilter
+have=$(sysctl -n fs.inotify.max_user_instances)
+if [ "$have" -lt 1024 ]; then
+  sysctl -w fs.inotify.max_user_instances=1024
+fi`
+
+// prepareHost runs hostSetup with the machine's own modprobe and sysctl,
+// from a privileged container in the machine's mount namespace, so a run
+// needs nothing on the machine besides Go and Docker. The changes hold until
+// the machine reboots. node is an image of the nodes, which has nsenter: a
+// fresh one, or a node of the cache.
+func prepareHost(ctx context.Context, node string) error {
+	_, err := command(ctx, "docker", "run", "--rm", "--privileged", "--pid=host", node,
+		"nsenter", "--target", "1", "--mount", "--", "sh", "-c", hostSetup)
+	return err
 }

@@ -98,15 +98,17 @@ spec:
         login: true
         disablePassword: true  # PASSWORD NULL
       {{- end }}
+    {{- with .Values.rwLoadBalancer }}
     services:
       additional:
         # 5432 on every node, to the primary.
         - selectorType: rw
           serviceTemplate:
             metadata:
-              name: {{ .Values.rwLoadBalancer.name }}
+              name: {{ .name }}
             spec:
               type: LoadBalancer
+    {{- end }}
 
   monitoring:
     # The queries of queries.yaml.

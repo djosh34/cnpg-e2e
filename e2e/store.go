@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"bytes"
@@ -11,12 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/testcontainers/testcontainers-go"
 )
 
 // The store: versitygw with TLS under its own name, with a certificate of
@@ -59,25 +62,6 @@ var s3Policy = `{"Version": "2012-10-17", "Statement": [
 ]}`
 
 const versioningOn = `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status></VersioningConfiguration>`
-
-// startStore starts the store and sets it up.
-func startStore(ctx context.Context, root *ca) error {
-	cert, key, err := root.serverCert(s3Name)
-	if err != nil {
-		return err
-	}
-	err = container{
-		name: "s3", ip: s3IP, image: s3Image,
-		opts:  []string{"--entrypoint", "/usr/local/bin/versitygw"},
-		args:  s3Args,
-		files: map[string]string{"/tls/tls.crt": string(cert), "/tls/tls.key": string(key)},
-		dirs:  []string{"/data", "/iam", "/versions"},
-	}.run(ctx)
-	if err != nil {
-		return err
-	}
-	return setUpStore(ctx, root)
-}
 
 // s3Args are the arguments of versitygw.
 var s3Args = []string{"--access", s3RootAccess, "--secret", s3RootSecret, "--port", ":443",
@@ -179,16 +163,23 @@ func (c s3Client) want(ctx context.Context, method, path, body string, status in
 // The store breaks in one of two ways. Stopped, it refuses connections: its
 // address belongs to a container that listens on no port. Paused, it takes
 // connections and never answers. Either way it keeps its files, users and
-// settings.
+// settings. The stand-in runs sleep of image, an image of the lab that has
+// it, on the lab's network. restoreStore removes it, and Ryuk does when the
+// test is killed, as it does the lab's containers: the stand-in has their
+// labels.
 const storeGone = "s3-gone"
 
-func stopStore(ctx context.Context) error {
+func stopStore(ctx context.Context, network, image string) error {
 	if _, err := command(ctx, "docker", "stop", "-t", "0", "s3"); err != nil {
 		return err
 	}
-	return container{
-		name: storeGone, ip: s3IP, image: manifest.K3s.Image, opts: []string{"--entrypoint", "/bin/sleep"}, args: []string{"86400"},
-	}.run(ctx)
+	args := []string{"run", "--detach", "--name", storeGone, "--network", network, "--ip", s3IP}
+	labels := testcontainers.GenericLabels()
+	for _, k := range slices.Sorted(maps.Keys(labels)) {
+		args = append(args, "--label", k+"="+labels[k])
+	}
+	_, err := command(ctx, "docker", append(args, "--entrypoint", "sleep", image, "infinity")...)
+	return err
 }
 
 func pauseStore(ctx context.Context) error {

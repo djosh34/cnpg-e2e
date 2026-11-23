@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -57,7 +57,6 @@ var vocabulary = map[string]word{
 	"the catalog | read on <role>":                             {event: readCatalog},
 	"<n> MB of WAL | written on <role>":                        {event: writeWAL},
 	"<role>'s WAL | switched":                                  {event: switchWAL},
-	"the instance image | changed":                             {mark: "change", event: changeImage},
 	"a backup | taken":                                         {mark: "backup", event: backUp},
 	"pg-restore | restored from the store":                     {mark: "restore", event: restore},
 	"the store | stopped":                                      {event: breakStore("stopped")},
@@ -83,8 +82,6 @@ var vocabulary = map[string]word{
 	"the replication certificate | reissued for <n> days":      {event: reissue("replication")},
 	"the server certificate | reissued":                        {event: reissue("server")},
 	"the replication certificate | reissued":                   {event: reissue("replication")},
-	"new k3s CAs | stored in etcd":                             {event: storeNewCAs},
-	"k3s | restarted on node <n>":                              {event: restartK3s},
 
 	// States.
 	"the cluster | healthy":                          {state: clusterHealthy},
@@ -97,7 +94,6 @@ var vocabulary = map[string]word{
 	"<role> | idle after a WAL switch":               {state: idleAfterSwitch},
 	"the chart's pg_ident lines | on <role>":         {state: identOn},
 	"the chart's pg_ident lines | on every instance": {state: identEverywhere},
-	"every instance | on the new image":              {state: onNewImage},
 	"every image on the nodes | from the manifest":   {state: imagesPinned},
 	"<role>'s WAL | waiting for the store":           {state: walWaiting},
 	"<role>'s WAL | archived":                        {state: walArchived},
@@ -114,9 +110,6 @@ var vocabulary = map[string]word{
 	"the commit | done":                              {state: commitDone},
 	"the replica lag panel | healthy":                {state: lagPanelHealthy},
 	"compliance | healthy":                           {state: compliant},
-	"node <n> | on the new CAs":                      {state: onNewCAs},
-	"etcd | healthy":                                 {state: etcdHealthy},
-	"every node | Ready":                             {state: everyNodeReady},
 
 	// Since an event.
 	"<role> and <role> | on the dashboard": {since: onDashboard},
@@ -241,7 +234,7 @@ func killPostgres(ctx context.Context, s *scenario, a args) error {
 		return err
 	}
 	id := strings.TrimPrefix(fields[1], "containerd://")
-	_, err = command(ctx, "docker", "exec", fields[0], "crictl", "stop", "--timeout", "0", id)
+	_, err = command(ctx, "docker", "exec", fields[0], "k3s", "crictl", "stop", "--timeout", "0", id)
 	return err
 }
 

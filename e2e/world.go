@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -6,59 +6,20 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/djosh34/cnpg-e2e/e2e/versions"
 )
 
-// world is everything one run starts: the network, the services outside
-// k3s, the three nodes, and the releases of the run's settings on them.
-// newWorld installs no releases: helmfile installs them through the
-// playbooks, which only the lab (lab_test.go) runs so far.
-// Nothing of it outlives the e2e test's container.
+// world is what a feature scenario runs on: the lab, started from the
+// cache, with every chart deployed by upgrade.yml, the versions of the run,
+// the charts' secrets that upgrade.yml got, and the monitoring.
 type world struct {
-	root    *ca
-	bao     *openbao
-	mon     *monitoring
-	cluster chartValues // of the cluster's release
+	lab *lab
+	m   *versions.Manifest
+	env map[string]string
+	mon *monitoring
 
 	built time.Time // when the e2e test started to build it
-}
-
-// newWorld builds the world, with the cluster on the instance image
-// firstImage.
-func newWorld(ctx context.Context, firstImage string) (*world, error) {
-	root, err := newCA()
-	if err != nil {
-		return nil, err
-	}
-	if err := createNetwork(ctx); err != nil {
-		return nil, err
-	}
-	w := &world{root: root, built: time.Now()}
-	logf("building the client image")
-	if err := buildClient(ctx); err != nil {
-		return nil, err
-	}
-	logf("starting the DNS, the company CA, the store and the monitoring")
-	if err := startDNS(ctx); err != nil {
-		return nil, err
-	}
-	if w.bao, err = startACME(ctx, root); err != nil {
-		return nil, err
-	}
-	if err := startStore(ctx, root); err != nil {
-		return nil, err
-	}
-	if w.mon, err = startMonitoring(ctx, root); err != nil {
-		return nil, err
-	}
-	logf("starting k3s")
-	if err := startNodes(ctx); err != nil {
-		return nil, err
-	}
-	// The charts and their Secrets come from the playbooks' helmfile, which
-	// this runner does not run, so the scenario fails at its first look at
-	// the cluster.
-	logf("no charts: helmfile installs them through the playbooks, which only the lab runs")
-	return w, nil
 }
 
 // takeBackup starts a backup of the cluster to the store, through the

@@ -1,16 +1,16 @@
-package main
+package e2e
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// The words of the vocabulary about WAL, the store, backups and restores,
-// and changes of the cluster's release.
+// The words of the vocabulary about WAL, the store, backups and restores.
 
 const (
 	// The backup a scenario takes, and the cluster it restores it into.
@@ -192,37 +192,6 @@ func idleAfterSwitch(ctx context.Context, _ *scenario, a args) error {
 	}
 }
 
-// changeImage: the cluster's release gets the manifest's
-// postgresql.imageName, the rollout scenario's second image. CNPG restarts
-// every instance on it, the primary last, in place.
-func changeImage(ctx context.Context, s *scenario, _ args) error {
-	s.primaryOut = true
-	return s.upgradeCluster(ctx, "--set-string", "postgresql.imageName="+manifest.PostgreSQL.ImageName)
-}
-
-// onNewImage: every instance runs the manifest's postgresql.imageName and
-// is ready.
-func onNewImage(ctx context.Context, _ *scenario, _ args) error {
-	pods, err := instances(ctx, clusterName)
-	if err != nil {
-		return err
-	}
-	if len(pods) != nodeCount {
-		return fmt.Errorf("instances: %v", pods)
-	}
-	for _, pod := range pods {
-		out, err := kubectl(ctx, "get", "pod", pod, "-n", namespace, "-o",
-			`jsonpath={.spec.containers[?(@.name=="postgres")].image} {.status.containerStatuses[?(@.name=="postgres")].ready}`)
-		if err != nil {
-			return err
-		}
-		if out != manifest.PostgreSQL.ImageName+" true" {
-			return fmt.Errorf("the image of %s, and whether it is ready: %s", pod, out)
-		}
-	}
-	return nil
-}
-
 func backUp(ctx context.Context, _ *scenario, _ args) error {
 	return takeBackup(ctx, scenarioBackup)
 }
@@ -231,24 +200,26 @@ func backupDone(ctx context.Context, _ *scenario, _ args) error {
 	return backupCompleted(ctx, scenarioBackup)
 }
 
-// upgradeCluster changes the cluster's release: helm upgrade with the values
-// it has, and more.
-func (s *scenario) upgradeCluster(ctx context.Context, more ...string) error {
-	args := append([]string{"upgrade", clusterRelease, s.w.cluster.chart, "--namespace", namespace, "--reuse-values"}, more...)
-	_, err := helm(ctx, 5*time.Minute, args...)
-	return err
-}
-
-// restore installs the cluster's chart with the cluster's values as
-// pg-restore, a new cluster that restores the cluster's backups and WAL from
-// the store. It gets its own rw LoadBalancer and no read LoadBalancer.
+// restore runs upgrade.yml with pg_restore on, which adds the release
+// pg-restore to the helmfile: a new cluster that restores the cluster's
+// backups and WAL from the store. Its issuers get new EAB keys, one for
+// each ACME account. The playbook returns once pg-restore is ready, as
+// helmfile waits for each release.
 func restore(ctx context.Context, s *scenario, _ args) error {
-	args := append([]string{"install", restoredCluster, s.w.cluster.chart, "--namespace", namespace}, s.w.cluster.values...)
-	args = append(args, "--set", "cluster.name="+restoredCluster, "--set", "recovery.enabled=true",
-		"--set", "recovery.sourceCluster="+clusterName, "--set", "rwLoadBalancer.name="+restoredCluster+"-rw-lb",
-		"--set", "readLoadBalancer=null")
-	_, err := helm(ctx, 5*time.Minute, args...)
-	return err
+	env := maps.Clone(s.w.env)
+	for _, account := range []string{"PG_RESTORE_SERVER", "PG_RESTORE_REPLICATION"} {
+		key, err := s.w.lab.bao.newEAB(ctx)
+		if err != nil {
+			return err
+		}
+		env[account+"_EAB_KID"], env[account+"_EAB_HMAC"] = key.id, key.key
+	}
+	out, err := s.w.lab.playbook(ctx, env, "upgrade.yml", "--extra-vars", "pg_restore=true")
+	if err != nil {
+		return err
+	}
+	s.detail = oneLine(recap(out))
+	return nil
 }
 
 func restoreHealthy(ctx context.Context, _ *scenario, _ args) error {
@@ -314,7 +285,7 @@ func breakStore(how string) func(context.Context, *scenario, args) error {
 		s.store = how
 		var err error
 		if how == "stopped" {
-			err = stopStore(ctx)
+			err = stopStore(ctx, s.w.lab.network.Name, s.w.lab.images["controller"])
 		} else {
 			err = pauseStore(ctx)
 		}

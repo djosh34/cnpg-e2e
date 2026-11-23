@@ -1,15 +1,19 @@
-package main
+package e2e
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/testcontainers/testcontainers-go"
 )
 
 // The application host: the client image, outside k3s, with its own name
@@ -19,23 +23,33 @@ const (
 	clientName = "orders-app.test"
 )
 
-// The client image: the client binary of the e2e image, with the two-line
-// Dockerfile of client/, which the inner docker builds at start.
-const (
-	clientImage = "client"
-	clientDir   = "/opt/e2e/client"
-)
+// The client image: the client binary, built for amd64 from client/,
+// with the two-line Dockerfile there.
+const clientImage = "cnpg-e2e-client:local"
 
-func buildClient(ctx context.Context) error {
-	_, err := command(ctx, "docker", "build", "--quiet", "--tag", clientImage, clientDir)
+// buildClient builds the client image, with dir for the build's files.
+func buildClient(ctx context.Context, dir string) error {
+	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", filepath.Join(dir, "client"), "./client")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
+	if out, err := build.CombinedOutput(); err != nil {
+		return fmt.Errorf("go build ./client: %w: %s", err, out)
+	}
+	dockerfile, err := os.ReadFile("client/Dockerfile")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), dockerfile, 0o644); err != nil {
+		return err
+	}
+	_, err = command(ctx, "docker", "build", "--quiet", "--tag", clientImage, dir)
 	return err
 }
 
-// startClient starts the client with a new EAB key. It returns once the
-// client has read and, when it writes, written. The client reads and writes
-// through GORM on rw only.
+// startClient starts the client on the lab's network with a new EAB key.
+// It returns once the client has read and, when it writes, written. The
+// client reads and writes through GORM on rw only.
 func (w *world) startClient(ctx context.Context, writes bool) error {
-	key, err := w.bao.newEAB(ctx)
+	key, err := w.lab.bao.newEAB(ctx)
 	if err != nil {
 		return err
 	}
@@ -43,14 +57,16 @@ func (w *world) startClient(ctx context.Context, writes bool) error {
 	for i := range nodeCount {
 		hosts[i] = nodeHost(i)
 	}
-	args := []string{"-name", clientName, "-acme", acmeDirectory, "-ca", "/ca.crt",
-		"-hosts", strings.Join(hosts, ","), "-writes=" + strconv.FormatBool(writes)}
-	err = container{
+	_, err = w.lab.run(ctx, labContainer{
 		name: "client", ip: clientIP, image: clientImage,
-		opts:  []string{"--entrypoint", "/client", "--env", "EAB_KID=" + key.id, "--env", "EAB_HMAC=" + key.key},
-		args:  args,
-		files: map[string]string{"/ca.crt": string(w.root.certPEM)},
-	}.run(ctx)
+		files: map[string]string{"/ca.crt": string(w.lab.root.certPEM)},
+		opts: []testcontainers.ContainerCustomizer{
+			testcontainers.WithEntrypoint("/client"),
+			testcontainers.WithCmd("-name", clientName, "-acme", acmeDirectory, "-ca", "/ca.crt",
+				"-hosts", strings.Join(hosts, ","), "-writes="+strconv.FormatBool(writes)),
+			testcontainers.WithEnv(map[string]string{"EAB_KID": key.id, "EAB_HMAC": key.key}),
+		},
+	})
 	if err != nil {
 		return err
 	}

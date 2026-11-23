@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -44,9 +44,10 @@ import (
 //
 // The scenario restore starts the lab from the cache, pulled or built here,
 // checks that the cluster is Ready, fills the registry and runs upgrade.yml,
-// which applies every chart, and checks that the cluster is healthy, as a
-// scenario starts. With -no-build it fails where it would build the cache,
-// as in CI, where the cache job published it before.
+// which applies every chart, and checks that the cluster is healthy, as
+// every scenario of the feature files starts (feature.go). With -no-build
+// those fail where they would build the cache, as in CI, where the cache
+// job published it before.
 const (
 	cacheScenario   = "cache"
 	restoreScenario = "restore"
@@ -58,7 +59,7 @@ const (
 
 var (
 	pushFlag    = flag.Bool("push", false, "with -scenario cache: push a cache it builds to this repo's packages, which only CI does")
-	noBuildFlag = flag.Bool("no-build", false, "with -scenario restore: fail when the cache cannot be pulled, instead of building it")
+	noBuildFlag = flag.Bool("no-build", false, "with a scenario that starts from the cache: fail when the cache cannot be pulled, instead of building it")
 )
 
 // cache is a cache to start the lab from: the image of each container it
@@ -98,7 +99,7 @@ func cacheRef(name, tag string) string {
 // cache leaves out, and the Go code that starts the lab, names its machines
 // and addresses, and sets up the store and the CA.
 var cacheInputs = []string{
-	"../ansible", "lab_test.go", "cache_test.go", "outside.go", "store.go", "ca.go", "nodes.go", "docker.go", "client.go",
+	"../ansible", "lab.go", "cache.go", "outside.go", "store.go", "ca.go", "nodes.go", "client.go",
 }
 
 // cacheTag is the tag of the cache of this checkout: a hash of the images of
@@ -292,11 +293,22 @@ func (l *lab) save(ctx context.Context, tag string) error {
 	return nil
 }
 
-// testRestore starts the lab from the cache of this checkout, pulled or
-// built here, checks that every node turns Ready, then deploys every chart
-// with upgrade.yml and checks that the cluster is healthy. It writes what
-// it saw to results/restore/report.txt.
+// testRestore starts the lab from the cache, then deploys every chart with
+// upgrade.yml and checks that the cluster is healthy. It writes what it saw
+// to results/restore/report.txt.
 func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
+	l, report, _ := startCached(ctx, t, m)
+	deployed, _, err := l.deploy(ctx, m, "upgrade.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeReport(t, restoreScenario, report+"\n"+deployed)
+}
+
+// startCached starts the lab from the cache of this checkout, pulled or
+// built here, and waits until every node is Ready. It returns the lab, what
+// it saw, and when the lab started.
+func startCached(ctx context.Context, t *testing.T, m *versions.Manifest) (*lab, string, time.Time) {
 	tag, err := cacheTag()
 	if err != nil {
 		t.Fatal(err)
@@ -316,13 +328,9 @@ func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	if err := l.ready(ctx, start); err != nil {
 		t.Fatal(err)
 	}
-	logf("the cluster of the cache %s is Ready %s after the start", tag, time.Since(start).Round(time.Second))
-	report := fmt.Sprintf("The cache %s: every node Ready %s after the start.\n\n", tag, time.Since(start).Round(time.Second))
-	deployed, _, err := l.deploy(ctx, m, "upgrade.yml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeReport(t, restoreScenario, report+deployed)
+	report := fmt.Sprintf("The cache %s: every node Ready %s after the start.\n", tag, time.Since(start).Round(time.Second))
+	logf("%s", strings.TrimSpace(report))
+	return l, report, start
 }
 
 // getCache returns the cache of tag: in Docker already, pulled from the

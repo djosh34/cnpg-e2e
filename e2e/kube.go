@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -9,15 +9,16 @@ import (
 	"time"
 )
 
-// The cluster the chart makes, as helm/values/cluster.yaml names it, and its
-// release in helm/helmfile.yaml.gotmpl.
+// The cluster the chart makes, as helm/values/cluster.yaml names it.
 const (
-	namespace      = "databases"
-	clusterName    = "pg"
-	clusterRelease = "pg"
+	namespace   = "databases"
+	clusterName = "pg"
 )
 
-var kubeconfig = workDir + "/kubeconfig"
+// kubeconfig is the file of the kubeconfig that kubectl uses: the cluster's
+// admin, at the API server of a node that runs (useRunningAPI). A feature
+// scenario writes it once the cluster runs.
+var kubeconfig string
 
 // kubectl runs kubectl with a time limit of 30 s per try. The API server
 // rejects requests while etcd elects a new leader, as after a node is

@@ -26,7 +26,7 @@ receivers:
   - name: default
   - name: databases
     webhook_configs:
-      - url: https://alerts.example.com/hook
+      - url: https://alerts.example.com:8443/hook
         send_resolved: true
 
 inhibit_rules:

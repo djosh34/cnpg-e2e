@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -9,11 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
-	"syscall"
 	"time"
 )
 
@@ -22,13 +19,9 @@ import (
 // exporter without its grants and short certificates; and the check of the
 // metric CNPGTransactionIDWraparound reads.
 
-// The ballast file on a node's data filesystem (disks.go), next to the
-// local-path volumes.
-const ballastName = "e2e-ballast"
-
 // fillDisk: a ballast file on the data filesystem of the instance's node
-// fills it to N % used, as the kubelet counts it. A second line grows the
-// same file.
+// (disks.go) fills it to N % used, as the kubelet counts it. A second line
+// grows the same file.
 func fillDisk(ctx context.Context, s *scenario, a args) error {
 	pod, percent := a.pods[0], a.ns[0]
 	if pod == anotherInstance {
@@ -38,12 +31,10 @@ func fillDisk(ctx context.Context, s *scenario, a args) error {
 	if err != nil {
 		return err
 	}
-	dir := diskMount(node)
-	path := filepath.Join(dir, ballastName)
-	if s.ballast != "" && s.ballast != path {
-		return fmt.Errorf("the ballast is on another disk: %s", s.ballast)
+	if s.ballast != "" && s.ballast != node {
+		return fmt.Errorf("the ballast is on the disk of %s", s.ballast)
 	}
-	used, size, err := usedBytes(dir)
+	used, size, err := diskUse(ctx, node)
 	if err != nil {
 		return err
 	}
@@ -51,33 +42,25 @@ func fillDisk(ctx context.Context, s *scenario, a args) error {
 	if used >= want {
 		return fmt.Errorf("the data filesystem of %s holds %s already", node, share(used, size))
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
+	// Kept before the write, which can fail halfway.
+	s.ballast = node
+	if err := addBallast(ctx, node, want-used); err != nil {
 		return err
 	}
-	s.ballast = path
-	info, err := f.Stat()
-	if err == nil {
-		// Allocated, not written: the blocks count as used at once.
-		err = syscall.Fallocate(int(f.Fd()), 0, 0, info.Size()+int64(want-used))
-	}
-	if err := errors.Join(err, f.Close()); err != nil {
-		return err
-	}
-	used, size, err = usedBytes(dir)
+	used, size, err = diskUse(ctx, node)
 	s.detail = node + ": " + share(used, size)
 	return err
 }
 
 // removeBallast: the ballast file is gone.
-func removeBallast(_ context.Context, s *scenario, _ args) error {
+func removeBallast(ctx context.Context, s *scenario, _ args) error {
 	if s.ballast == "" {
 		return errors.New("no disk was filled")
 	}
-	if err := os.Remove(s.ballast); err != nil {
+	if _, err := command(ctx, "docker", "exec", s.ballast, "rm", storageDir+"/"+ballastName); err != nil {
 		return err
 	}
-	used, size, err := usedBytes(filepath.Dir(s.ballast))
+	used, size, err := diskUse(ctx, s.ballast)
 	s.detail = share(used, size)
 	s.ballast = ""
 	return err
@@ -202,12 +185,12 @@ func reissue(kind string) func(context.Context, *scenario, args) error {
 		if len(a.ns) > 0 {
 			want = time.Duration(a.ns[0]) * 24 * time.Hour
 			ttl := fmt.Sprintf("%dh", a.ns[0]*24)
-			if err := s.w.bao.call(ctx, http.MethodPatch, acmeRole, map[string]any{"ttl": ttl, "max_ttl": ttl}, nil); err != nil {
+			if err := s.w.lab.bao.call(ctx, http.MethodPatch, acmeRole, map[string]any{"ttl": ttl, "max_ttl": ttl}, nil); err != nil {
 				return err
 			}
 			defer func() {
 				back := map[string]any{"ttl": acmeTTL, "max_ttl": acmeTTL}
-				err = errors.Join(err, s.w.bao.call(ctx, http.MethodPatch, acmeRole, back, nil))
+				err = errors.Join(err, s.w.lab.bao.call(ctx, http.MethodPatch, acmeRole, back, nil))
 			}()
 		}
 		if err := triggerIssuing(ctx, name); err != nil {

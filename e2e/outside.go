@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"bytes"
@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/djosh34/cnpg-e2e/e2e/images"
 )
 
 // The services outside k3s that the nodes need: DNS, the store and the
@@ -22,10 +20,6 @@ const (
 
 	s3Name   = "s3.example.test"
 	acmeName = "acme.example.test"
-
-	corednsImage = "coredns/coredns:1.15.0@sha256:0a9d8c8ddf34347eb59aad9a8784f0710de88d6d112726d11d271f9bc6daca26"
-	openbaoImage = "openbao/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f"
-	s3Image      = "ghcr.io/versity/versitygw:v1.10.0@sha256:89cad13cc981986ee284cbafea4613f9533ce6fd5f37a2c96c4c4fb8adb3a316"
 )
 
 // The ACME directory of the company CA, and the role its certificates come
@@ -51,45 +45,12 @@ func hosts() string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// startDNS starts CoreDNS with the Corefile of images/dns.
-func startDNS(ctx context.Context) error {
-	corefile, err := images.Read("dns/Corefile")
-	if err != nil {
-		return err
-	}
-	return container{
-		name: "dns", ip: dnsIP, image: corednsImage, args: []string{"-conf", "/etc/coredns/Corefile"},
-		files: map[string]string{"/etc/coredns/Corefile": corefile, "/etc/coredns/hosts": hosts()},
-	}.run(ctx)
-}
-
 // openbao is the API of the ACME server's OpenBao, for the e2e test.
 type openbao struct {
 	http  *http.Client
 	token string
 	// The key that unseals it after a restart.
 	unseal string
-}
-
-// startACME starts the company CA with the OpenBao config of images/acme,
-// then sets it up.
-func startACME(ctx context.Context, root *ca) (*openbao, error) {
-	cert, key, err := root.serverCert(acmeName)
-	if err != nil {
-		return nil, err
-	}
-	config, err := images.Read("acme/bao.hcl")
-	if err != nil {
-		return nil, err
-	}
-	err = container{
-		name: "acme", ip: acmeIP, image: openbaoImage, args: []string{"server", "-config=/bao/bao.hcl"},
-		files: map[string]string{"/bao/bao.hcl": config, "/bao/tls.crt": string(cert), "/bao/tls.key": string(key)},
-	}.run(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return setUpACME(ctx, root)
 }
 
 // setUpACME sets up the company CA, once its OpenBao answers: OpenBao's PKI

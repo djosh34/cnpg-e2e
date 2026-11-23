@@ -99,6 +99,7 @@
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       HELMFILE_UPGRADE_NOTICE_DISABLED: "1"
       REGISTRY_PRESENT: "{{ (registry.stdout | length > 0) | string | lower }}"
+      PG_RESTORE: "{{ pg_restore | bool | string | lower }}"
   register: apply
   no_log: true
   failed_when: apply.rc not in [0, 2]

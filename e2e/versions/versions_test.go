@@ -64,22 +64,18 @@ func TestImages(t *testing.T) {
 const file = "../../versions/versions.yaml"
 
 // The versions file has what a run reads. Pinned has its registry and
-// PostgreSQL images but not k3s's node image, and every image and chart but
-// k3s's is one of this repo's packages.
+// PostgreSQL images, and every image and chart but k3s's is one of this
+// repo's packages.
 func TestVersionsFile(t *testing.T) {
 	m, err := Load(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, image := range []string{m.Registry.Image, m.PostgreSQL.ImageName, m.PostgreSQL.RolloutFrom} {
+	for _, image := range []string{m.Registry.Image, m.PostgreSQL.ImageName} {
 		name, d, _ := strings.Cut(image, "@")
 		if !slices.Contains(m.Pinned(), Repository(name)+"@"+d) {
 			t.Errorf("%s is not in Pinned", image)
 		}
-	}
-	name, d, _ := strings.Cut(m.K3s.Image, "@")
-	if slices.Contains(m.Pinned(), Repository(name)+"@"+d) {
-		t.Errorf("the node image %s is in Pinned", m.K3s.Image)
 	}
 	for _, p := range m.Images() {
 		if !strings.HasPrefix(p.Repository, Packages+"/") || p.Tag == "" {
@@ -94,7 +90,7 @@ func TestVersionsFile(t *testing.T) {
 }
 
 func TestCheck(t *testing.T) {
-	if _, err := Parse([]byte("k3s: {version: v1}\n")); err == nil || !strings.Contains(err.Error(), "no k3s.image") {
+	if _, err := Parse([]byte("k3s: {version: v1}\n")); err == nil || !strings.Contains(err.Error(), "no k3s.images") {
 		t.Errorf("a manifest with only k3s.version: %v", err)
 	}
 	data, err := os.ReadFile(file)

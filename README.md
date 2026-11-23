@@ -10,7 +10,7 @@ go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario instal
 
 - **Needs** an amd64 machine with Go and a Docker that allows privileged containers. A run first loads the kernel module `br_netfilter` on the machine and raises its `fs.inotify.max_user_instances` to 1024, from a privileged container.
 - **Results** go to `results/`. The test passes when the scenario passed.
-- **Scenarios** are `airgap`, `install`, `install-kvm`, `restore` and `cache` below, and the tags in `e2e/features/`, after each of which `always.feature` runs. Those of the feature files get no charts yet, so they fail until they start from the cache like `restore`.
+- **Scenarios** are `airgap`, `install`, `install-kvm`, `restore` and `cache` below, and the tags in `e2e/features/`, after each of which `always.feature` runs.
 
 `go -C e2e test ./...` without `-scenario` runs the unit tests only and starts no container.
 
@@ -22,7 +22,9 @@ The scenario `install-kvm` is `install` on three Rocky Linux 9 VMs under QEMU an
 
 The scenario `restore` starts the same machines from the cache: a clean k3s cluster that `install.yml` installed without its helmfile step, with no charts, and the store and company CA next to it. It checks that every node turns Ready, then fills the registry, runs `upgrade.yml` and checks the cluster as `install` does. The cache is one image per container in this repo's packages, tagged by a hash of what makes it: the node, store and CA images, the k3s and node tools of the versions file, `ansible/` but its role `helmfile`, and the Go code that sets the machines up. A run that finds no cache builds it on the machine. The scenario `cache` builds it when the packages do not have it, and with `-push` pushes it, which only CI does.
 
-On GitHub, the `e2e` workflow runs scenarios by hand, each in its own job, after it publishes the images of `e2e/images` that are new and the cache when it is new. The `ci` workflow runs lint and unit tests on every pull request. The `mirror` workflow copies the images and charts of the versions file from Docker Hardened Images into this repo's packages and uploads the versions file with their digests.
+Each scenario of `e2e/features/` starts as `restore` does: from the cache, then the fill and `upgrade.yml`, and a healthy cluster with its first backup and the metrics of every source. Then it runs its lines and those of `always.feature` against the cluster: the cluster is healthy, no read or write gap is over the limit the feature file sets, no acknowledged write is lost, only the alerts the scenario names fired, the dashboard has data, and every image on the nodes is one the versions file pins. The test runs `kubectl` and `kubectl cnpg` of the versions file on the machine, which it downloads and checks against their sha256 there, and the client, the application outside the cluster, in a container next to the nodes. Each node keeps its database volumes on a Docker volume, but in `data-disk-full`, which fills a node's data disk: there every node gets a tmpfs of 1 GiB for them.
+
+On GitHub, the `e2e` workflow runs scenarios by hand, each in its own job, after it publishes the images of `e2e/images` that are new. Blank, it runs every scenario. The cache job publishes the cache when it is new, and only the scenarios that start from it wait for it. The `ci` workflow runs lint and unit tests on every pull request. The `mirror` workflow copies the images and charts of the versions file from Docker Hardened Images into this repo's packages and uploads the versions file with their digests.
 
 ## Install k3s with Ansible
 
@@ -59,6 +61,9 @@ The role `helmfile` passes the company CA and the charts' secrets to helmfile as
 | `PG_SERVER_EAB_KID`, `PG_SERVER_EAB_HMAC` | An EAB key of the ACME CA for the database's server certificate |
 | `PG_REPLICATION_EAB_KID`, `PG_REPLICATION_EAB_HMAC` | One for its replication certificate |
 | `OTEL_CLIENT_EAB_KID`, `OTEL_CLIENT_EAB_HMAC` | One for the OTel collectors' client certificate |
+| `PG_RESTORE_SERVER_EAB_KID`, `PG_RESTORE_SERVER_EAB_HMAC`, `PG_RESTORE_REPLICATION_EAB_KID`, `PG_RESTORE_REPLICATION_EAB_HMAC` | Only with `pg_restore=true`: one each for the server and replication certificates of `pg-restore` |
+
+`pg_restore=true` adds the release `pg-restore`: a second database cluster that restores the backups and WAL of `pg` from the store, with no LoadBalancer of its own. A later run without it leaves `pg-restore` as it is.
 
 ## Fill a registry
 
@@ -78,7 +83,7 @@ go -C e2e run ./cmd/fill ../versions/versions.yaml registry.example:5000
 | `versions/versions.yaml` | Every version and image digest a run uses, all of them this repo's packages |
 | `ansible/` | The playbooks that install and upgrade k3s, and their roles |
 | `ansible/k3s/` | The k3s config files of every node |
-| `e2e/` | The Go runner, its client and the feature files |
+| `e2e/` | The e2e test, its client and the feature files |
 | `e2e/images/` | The images this repo builds: the nodes, the VM of `install-kvm`, the controller and the services outside k3s, with their config and the monitoring files |
 | `e2e/cmd/` | The `fill`, `mirror` and `images` commands |
 

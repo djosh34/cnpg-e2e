@@ -1,8 +1,7 @@
-package main
+package e2e
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -85,14 +84,13 @@ type scenario struct {
 	paused   []string // the instances whose replay is paused
 	cut      []string // the instances cut off and not reconnected
 
-	switched map[string]string             // the WAL file each instance switched away from last
-	restarts map[string]int                // the restart count of an instance's postgres container before it was killed
-	ident    string                        // the pg_ident lines every instance had at the first line about them
-	store    string                        // how the store is broken: stopped, paused, or "" when it is not
-	commit   *background                   // the commit "a commit is started" started
-	ballast  string                        // the ballast file on a data disk, until it is removed
-	held     *held                         // the sessions held on an instance, until they are ended
-	newCAs   map[string]x509.VerifyOptions // the new k3s CAs stored in etcd, by name
+	switched map[string]string // the WAL file each instance switched away from last
+	restarts map[string]int    // the restart count of an instance's postgres container before it was killed
+	ident    string            // the pg_ident lines every instance had at the first line about them
+	store    string            // how the store is broken: stopped, paused, or "" when it is not
+	commit   *background       // the commit "a commit is started" started
+	ballast  string            // the node whose data disk has the ballast file, until it is removed
+	held     *held             // the sessions held on an instance, until they are ended
 
 	started time.Time       // when the scenario started, after the monitoring was ready
 	alerts  map[string]bool // the alerts the scenario names, "<alertname> <pod>": true when they must fire, false when they may
@@ -642,7 +640,7 @@ func (s *scenario) runAlways() error {
 			})
 		},
 		Options: &godog.Options{
-			Format: format, Output: io.Discard, Strict: true, NoColors: true,
+			Format: format, Output: io.Discard, Strict: true, NoColors: true, DefaultContext: s.ctx,
 			Paths: []string{filepath.Join(featuresDir, "always.feature")},
 		},
 	}

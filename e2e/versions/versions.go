@@ -46,7 +46,6 @@ type Pin struct {
 // K3s is the k3s release of the nodes.
 type K3s struct {
 	Version string `yaml:"version"`
-	Image   string `yaml:"image"` // rancher/k3s by tag and digest
 	// The airgap image tarball of each architecture, which k3s imports at
 	// start.
 	Airgap map[string]Download `yaml:"airgap"`
@@ -60,7 +59,7 @@ type Download struct {
 	SHA256 string `yaml:"sha256"`
 }
 
-// Tools are the tools of the e2e image that have to match the cluster.
+// Tools are the tools of the e2e test that have to match the cluster.
 type Tools struct {
 	Kubectl     Tool   `yaml:"kubectl"`
 	KubectlCNPG Tool   `yaml:"kubectl-cnpg"`
@@ -89,13 +88,11 @@ type Chart struct {
 	Digest     string `yaml:"digest"`
 }
 
-// PostgreSQL are the instance images. The cnpg-cluster charts read
-// ImageName; RolloutFrom is the image the rollout scenario starts on.
-// PostgresUID and PostgresGID are the ids both images name postgres, which
-// the cluster gets.
+// PostgreSQL is the instance image, which the cnpg-cluster chart reads.
+// PostgresUID and PostgresGID are the ids it names postgres, which the
+// cluster gets.
 type PostgreSQL struct {
 	ImageName   string `yaml:"imageName"`
-	RolloutFrom string `yaml:"rolloutFrom"`
 	PostgresUID int    `yaml:"postgresUID"`
 	PostgresGID int    `yaml:"postgresGID"`
 }
@@ -158,7 +155,6 @@ func (m *Manifest) check() error {
 		}
 	}
 	need(m.K3s.Version != "", "k3s.version")
-	need(strings.Contains(m.K3s.Image, "@sha256:"), "k3s.image with a digest")
 	need(len(m.K3s.Images) > 0, "k3s.images")
 	// The run is amd64 only.
 	a := m.K3s.Airgap["amd64"]
@@ -177,7 +173,6 @@ func (m *Manifest) check() error {
 	}
 	need(strings.Contains(m.Registry.Image, "@sha256:"), "registry.image with a digest")
 	need(strings.Contains(m.PostgreSQL.ImageName, "@sha256:"), "postgresql.imageName with a digest")
-	need(strings.Contains(m.PostgreSQL.RolloutFrom, "@sha256:"), "postgresql.rolloutFrom with a digest")
 	need(m.PostgreSQL.PostgresUID > 0 && m.PostgreSQL.PostgresGID > 0, "postgresql.postgresUID and postgresGID, both above 0")
 	return errors.Join(errs...)
 }
@@ -187,8 +182,8 @@ func (m *Manifest) check() error {
 // docker.io/library/busybox. They are the images of every string such as
 // registry.example/name:tag@sha256:…, and of every image block of a chart's
 // values: a map with repository (after registry when there is one) and
-// either digest or a tag that ends in @sha256:…. k3s's node image is not
-// one of them: the nodes never pull it.
+// either digest or a tag that ends in @sha256:…. k3s's own images are not
+// among them: k3s imports them from its airgap tarball.
 func (m *Manifest) Pinned() []string {
 	pinned := make([]string, 0, len(m.images))
 	for _, p := range m.images {
@@ -258,7 +253,8 @@ func (c chartImage) pinnedIn(manifest any) bool {
 // images walks the manifest for its images: those it pins, the paths of
 // the image blocks without a digest, and of those with a digest both in
 // digest and in tag, of which a chart reads only one. charts holds chart
-// repositories, not images, and k3s the node image, which no node pulls.
+// repositories, not images, and k3s its airgap images by tag, which k3s
+// imports.
 type images struct {
 	pinned               []Pin
 	unpinned, twoDigests []string
