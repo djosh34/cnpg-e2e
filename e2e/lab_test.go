@@ -40,16 +40,24 @@ const (
 	// store's registry bucket, which the registry of every node reads too.
 	registryIP     = "10.77.0.21"
 	registryBucket = "registry"
+	// The keys of the registry of every node, which may only read the
+	// registry bucket.
+	registryAccess = "example-registry-access-key"
+	registrySecret = "example-registry-secret-key"
+	// http.secret, which the writable registry and the registry of every
+	// node share.
+	registryHTTPSecret = "example-registry-secret"
 	// The machine that runs Ansible.
 	controllerIP = "10.77.0.5"
-	// Where the controller has the checkout's ansible/, next to versions/
-	// as in the checkout. testcontainers copies a directory only into one
-	// that is there, such as /.
+	// Where the controller has the checkout's ansible/, next to helm/ and
+	// versions/ as in the checkout. testcontainers copies a directory only
+	// into one that is there, such as /.
 	ansibleDir = "/ansible"
 	// k3s's containerd keeps its images and snapshots here. It cannot keep
 	// them in the node's own layer, where the overlay mounts of its
 	// snapshots fail, so a volume holds them.
 	containerdDir = "/var/lib/rancher/k3s/agent/containerd"
+	kubeletDir    = "/var/lib/kubelet"
 )
 
 var registryAddr = registryIP + ":5000"
@@ -70,7 +78,7 @@ storage:
     disable: true
 http:
   addr: :5000
-  secret: example-registry-secret
+  secret: ` + registryHTTPSecret + `
 `
 
 // The inventory of the controller's Ansible: the nodes by name and address,
@@ -170,7 +178,13 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 					h.Privileged = true
 					h.CgroupnsMode = moby.CgroupnsModePrivate
 					h.Tmpfs = map[string]string{"/run": "", "/run/lock": "", "/tmp": ""}
-					h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeVolume, Target: containerdDir})
+					// The kubelet's pod volumes and k3s's local-path volumes,
+					// such as the instances' data, on volumes too: the
+					// instances run in a user namespace, and runc cannot
+					// idmap a mount of the node's own overlay layer.
+					h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeVolume, Target: containerdDir},
+						mount.Mount{Type: mount.TypeVolume, Target: kubeletDir},
+						mount.Mount{Type: mount.TypeVolume, Target: storageDir})
 				}),
 				// systemctl is-active of two units holds when either is.
 				testcontainers.WithWaitStrategy(wait.ForExec([]string{"sh", "-c", "systemctl is-active sshd && systemctl is-active default-route"}).
@@ -192,6 +206,7 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 			testcontainers.WithFiles(
 				testcontainers.ContainerFile{HostFilePath: "../ansible", ContainerFilePath: ansibleDir, FileMode: 0o755},
 				testcontainers.ContainerFile{HostFilePath: versionsFile, ContainerFilePath: "/versions/versions.yaml", FileMode: 0o644},
+				testcontainers.ContainerFile{HostFilePath: "../helm", ContainerFilePath: "/helm", FileMode: 0o755},
 			),
 			// The nodes are new on every run.
 			testcontainers.WithEnv(map[string]string{
@@ -243,7 +258,8 @@ func (l *lab) runACME(ctx context.Context, image string, from *cache) error {
 }
 
 // runStore starts the store, then sets it up and makes the registry's
-// bucket, or, restored, waits until it answers. Its data is in the
+// bucket, with a user that may only read it, or, restored, waits until it
+// answers and sets the buckets' settings again. Its data is in the
 // container's own layer, so that docker commit keeps it.
 func (l *lab) runStore(ctx context.Context, image string, restored bool) error {
 	cert, key, err := l.root.serverCert(s3Name)
@@ -269,13 +285,44 @@ func (l *lab) runStore(ctx context.Context, image string, restored bool) error {
 		if err != nil {
 			return fmt.Errorf("the store answering: %w", err)
 		}
+		// versitygw keeps a bucket's versioning and policy in extended
+		// attributes, which docker commit leaves out.
+		for _, st := range []struct {
+			path, body string
+			status     int
+		}{
+			{"/" + s3Bucket + "?versioning", versioningOn, 200},
+			{"/" + s3Bucket + "?policy", s3Policy, 204},
+			{"/" + registryBucket + "?policy", registryPolicy, 204},
+		} {
+			if err := rootKeys.want(ctx, http.MethodPut, st.path, st.body, st.status); err != nil {
+				return fmt.Errorf("the restored store's settings: %w", err)
+			}
+		}
 		return nil
 	}
 	if err := setUpStore(ctx, l.root); err != nil {
 		return err
 	}
-	return rootKeys.want(ctx, http.MethodPut, "/"+registryBucket, "", 200)
+	if err := rootKeys.want(ctx, http.MethodPut, "/"+registryBucket, "", 200); err != nil {
+		return err
+	}
+	_, err = command(ctx, "docker", "exec", "s3", "/usr/local/bin/versitygw", "admin", "--access", s3RootAccess,
+		"--secret", s3RootSecret, "--endpoint-url", s3Admin, "create-user", "--access", registryAccess, "--secret", registrySecret, "--role", "user")
+	if err != nil {
+		return err
+	}
+	return rootKeys.want(ctx, http.MethodPut, "/"+registryBucket+"?policy", registryPolicy, 204)
 }
+
+// registryPolicy lets the registry of every node list and read the
+// registry bucket, and nothing else.
+var registryPolicy = `{"Version": "2012-10-17", "Statement": [
+  {"Effect": "Allow", "Principal": {"AWS": ["` + registryAccess + `"]}, "Action": "s3:ListBucket",
+   "Resource": "arn:aws:s3:::` + registryBucket + `"},
+  {"Effect": "Allow", "Principal": {"AWS": ["` + registryAccess + `"]}, "Action": "s3:GetObject",
+   "Resource": "arn:aws:s3:::` + registryBucket + `/*"}
+]}`
 
 // runRegistry starts the writable registry on the registry bucket, with
 // the registry image of the versions file, and waits until it answers.
@@ -394,10 +441,15 @@ func (l *lab) run(ctx context.Context, c labContainer) (*testcontainers.DockerCo
 }
 
 // playbook runs ansible-playbook with args on the controller, from the
-// checkout's ansible/, and returns its output.
-func (l *lab) playbook(ctx context.Context, args ...string) (string, error) {
+// checkout's ansible/, with env as its environment besides the
+// controller's, and returns its output.
+func (l *lab) playbook(ctx context.Context, env map[string]string, args ...string) (string, error) {
 	cmd := append([]string{"ansible-playbook"}, args...)
-	code, out, err := execIn(ctx, l.controller, cmd, tcexec.WithWorkingDir(ansibleDir))
+	vars := make([]string, 0, len(env))
+	for k, v := range env {
+		vars = append(vars, k+"="+v)
+	}
+	code, out, err := execIn(ctx, l.controller, cmd, tcexec.WithWorkingDir(ansibleDir), tcexec.WithEnv(vars))
 	if err != nil {
 		return out, err
 	}

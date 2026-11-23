@@ -1,7 +1,7 @@
 // Package versions reads the versions file, versions/versions.yaml: every
-// version of the system under test that an e2e run uses. Helm reads the same
-// file as a values file for every release, so each upstream chart finds its
-// images under its wrapper's dependency name.
+// version of the system under test that an e2e run uses.
+// helm/helmfile.yaml.gotmpl reads the same file and gives each release its
+// images from it.
 package versions
 
 import (
@@ -20,7 +20,7 @@ import (
 const Packages = "ghcr.io/djosh34/cnpg-e2e"
 
 // Manifest is what the e2e run reads from a manifest besides the charts'
-// own values, which only Helm reads.
+// own values, which only helmfile reads.
 type Manifest struct {
 	K3s        K3s              `yaml:"k3s"`
 	Tools      Tools            `yaml:"tools"`
@@ -79,15 +79,11 @@ type Script struct {
 	SHA256 string `yaml:"sha256"`
 }
 
-// Chart is where Helm pulls an upstream chart from. Name and Alias are
-// for a chart whose name differs from the wrapper's dependency, such as
-// cert-manager-chart for cert-manager: Name is the chart's own, Alias the
-// key its values are under. Both are empty when the wrapper's dependency
-// already names the chart. Digest is the digest of the chart's OCI
-// manifest.
+// Chart is an upstream chart in an OCI registry: Name is the chart's own
+// name, such as cert-manager-chart for the key cert-manager, and Digest the
+// digest of its OCI manifest.
 type Chart struct {
 	Name       string `yaml:"name"`
-	Alias      string `yaml:"alias"`
 	Repository string `yaml:"repository"`
 	Version    string `yaml:"version"`
 	Digest     string `yaml:"digest"`
@@ -177,7 +173,7 @@ func (m *Manifest) check() error {
 	for name, c := range m.Charts {
 		need(c.Repository != "" && exactVersion.MatchString(c.Version), "charts."+name+" with repository and an exact version")
 		need(sha256Digest.MatchString(c.Digest), "charts."+name+".digest")
-		need((c.Name == "") == (c.Alias == ""), "charts."+name+" with both name and alias, or neither")
+		need(c.Name != "", "charts."+name+".name")
 	}
 	need(strings.Contains(m.Registry.Image, "@sha256:"), "registry.image with a digest")
 	need(strings.Contains(m.PostgreSQL.ImageName, "@sha256:"), "postgresql.imageName with a digest")

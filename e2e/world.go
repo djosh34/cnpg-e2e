@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,6 +10,8 @@ import (
 
 // world is everything one run starts: the network, the services outside
 // k3s, the three nodes, and the releases of the run's settings on them.
+// newWorld installs no releases: helmfile installs them through the
+// playbooks, which only the lab (lab_test.go) runs so far.
 // Nothing of it outlives the e2e test's container.
 type world struct {
 	root    *ca
@@ -53,43 +54,12 @@ func newWorld(ctx context.Context, firstImage string) (*world, error) {
 	if err := startNodes(ctx); err != nil {
 		return nil, err
 	}
-	logf("patching k3s's own objects as k3s/patches.yaml says, and waiting for Traefik")
-	if err := patchK3s(ctx); err != nil {
-		return nil, err
-	}
-	keys := make([]eab, len(eabSecrets))
-	for i := range keys {
-		if keys[i], err = w.bao.newEAB(ctx); err != nil {
-			return nil, err
-		}
-	}
-	if err := createSecrets(ctx, runSecrets(root, keys)); err != nil {
-		return nil, err
-	}
-	if w.cluster, err = installCharts(ctx, firstImage); err != nil {
-		return nil, err
-	}
-	logf("waiting up to 15 min for the cluster to be healthy")
-	err = poll(ctx, time.Now().Add(15*time.Minute), func(ctx context.Context) error { return healthy(ctx, clusterName) })
-	if err != nil {
-		return nil, fmt.Errorf("the cluster is not healthy: %w", err)
-	}
-	// As in a cluster with scheduled backups, so the backup alert sees one.
-	logf("taking the first backup")
-	if err := takeBackup(ctx, firstBackup); err != nil {
-		return nil, err
-	}
-	logf("waiting up to 10 min for the first backup and for the metrics of every source")
-	err = poll(ctx, time.Now().Add(10*time.Minute), func(ctx context.Context) error {
-		return errors.Join(backupCompleted(ctx, firstBackup), w.mon.everySource(ctx))
-	})
-	if err != nil {
-		return nil, fmt.Errorf("the monitoring is not ready: %w", err)
-	}
+	// The charts and their Secrets come from the playbooks' helmfile, which
+	// this runner does not run, so the scenario fails at its first look at
+	// the cluster.
+	logf("no charts: helmfile installs them through the playbooks, which only the lab runs")
 	return w, nil
 }
-
-const firstBackup = "first"
 
 // takeBackup starts a backup of the cluster to the store, through the
 // barman-cloud plugin.

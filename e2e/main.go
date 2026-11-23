@@ -5,8 +5,9 @@
 //	e2e <scenario>
 //
 // The scenario is the tag of one scenario, without the @. The cluster is
-// built from the charts and values in /helm and the k3s files in /k3s, with
-// every version from the versions file /versions.yaml. TestScenario of
+// built from the k3s files in /k3s, with every version from the versions
+// file /versions.yaml; it gets no charts, so no scenario passes here until
+// the scenarios move to the lab. TestScenario of
 // scenario_test.go copies them from the checkout before the container
 // starts; the run never writes into them. The monitoring files are those of
 // e2e/images, built into the runner.
@@ -25,16 +26,13 @@ import (
 
 // Where TestScenario puts the checkout's files in the container.
 const (
-	// helm/: charts/, releases.yaml and values/.
-	helmDir = "/helm"
 	// ansible/k3s/.
 	k3sDir = "/k3s"
 	// e2e/features/.
 	featuresDir = "/features"
 	// versions/versions.yaml.
 	manifestFile = "/versions.yaml"
-	// Where a run keeps its own files: the copied charts, the kubeconfig and
-	// helm's caches.
+	// Where a run keeps its own files: the kubeconfig and helm's caches.
 	workDir = "/work"
 )
 

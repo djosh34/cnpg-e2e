@@ -1,0 +1,132 @@
+# Every chart of the cluster, as one reconcile: Ansible runs
+#
+#   helmfile --file helmfile.yaml.gotmpl apply --skip-diff-on-install
+#
+# on a node, for a new cluster and for a running one alike. It installs or
+# upgrades only the releases whose manifests changed, each release once the
+# releases it needs are ready, and rolls back a release that fails. The
+# charts are local files: charts/ here, and the upstream charts of the
+# versions file in upstream/, which Ansible copies from the controller.
+#
+# The images come from the registry of every node. On a new cluster it
+# goes first, from the archive Ansible put on each node, then the prepull
+# puts every image of the versions file on every node. On a running cluster
+# the prepull goes first, so the nodes have the new registry image before the
+# old registry stops. Ansible says which: REGISTRY_PRESENT is true when the
+# registry's DaemonSet is there.
+#
+# The secrets and the company CA come only from the environment, which
+# Ansible sets. helmfile writes the values to temporary files for helm,
+# under TMPDIR, which Ansible puts on a tmpfs.
+{{- $v := readFile "../versions/versions.yaml" | fromYaml }}
+{{- $present := eq (requiredEnv "REGISTRY_PRESENT") "true" }}
+{{- $ca := requiredEnv "COMPANY_CA" }}
+
+helmDefaults:
+  wait: true
+  atomic: true
+  createNamespace: true
+  timeout: 900
+
+releases:
+  - name: registry
+    namespace: registry
+    chart: ./charts/registry
+    needs: {{ if $present }}[registry/prepull]{{ else }}[]{{ end }}
+    values:
+      - values/registry.yaml
+      - image: {{ $v.registry.image | toJson }}
+        ca: {{ $ca | toJson }}
+        httpSecret: {{ requiredEnv "REGISTRY_HTTP_SECRET" | toJson }}
+        s3:
+          accessKey: {{ requiredEnv "REGISTRY_S3_ACCESS_KEY" | toJson }}
+          secretKey: {{ requiredEnv "REGISTRY_S3_SECRET_KEY" | toJson }}
+
+  - name: prepull
+    namespace: registry
+    chart: ./charts/prepull
+    needs: {{ if $present }}[]{{ else }}[registry/registry]{{ end }}
+    values:
+      - image: {{ $v.prepull.image | toJson }}
+        versions: {{ omit $v "k3s" "charts" | toJson }}
+
+  - name: cert-manager
+    namespace: cert-manager
+    chart: ./upstream/cert-manager.tgz
+    needs: [registry/prepull]
+    values:
+      - values/cert-manager.yaml
+      - {{ index $v "cert-manager" | toJson }}
+
+  - name: cnpg
+    namespace: cnpg-system
+    chart: ./upstream/cloudnative-pg.tgz
+    needs: [registry/prepull]
+    values:
+      - values/cloudnative-pg.yaml
+      - {{ index $v "cloudnative-pg" | toJson }}
+
+  # Its webhook's certificate is cert-manager's, and it serves CNPG.
+  - name: barman-cloud
+    namespace: cnpg-system
+    chart: ./upstream/plugin-barman-cloud.tgz
+    needs: [cert-manager/cert-manager, cnpg-system/cnpg]
+    values:
+      - values/barman-cloud.yaml
+      - {{ index $v "plugin-barman-cloud" | toJson }}
+
+  - name: pg
+    namespace: databases
+    chart: ./charts/cnpg-cluster
+    needs: [cnpg-system/barman-cloud]
+    values:
+      - values/cluster.yaml
+      - values/pg.yaml
+      - postgresql:
+          imageName: {{ $v.postgresql.imageName | toJson }}
+        cluster:
+          postgresUID: {{ $v.postgresql.postgresUID }}
+          postgresGID: {{ $v.postgresql.postgresGID }}
+        ca: {{ $ca | toJson }}
+        acme:
+          ca: {{ $ca | toJson }}
+          eab:
+            server:
+              keyID: {{ requiredEnv "PG_SERVER_EAB_KID" | toJson }}
+              hmac: {{ requiredEnv "PG_SERVER_EAB_HMAC" | toJson }}
+            replication:
+              keyID: {{ requiredEnv "PG_REPLICATION_EAB_KID" | toJson }}
+              hmac: {{ requiredEnv "PG_REPLICATION_EAB_HMAC" | toJson }}
+        objectStore:
+          accessKeyID: {{ requiredEnv "BACKUP_S3_ACCESS_KEY" | toJson }}
+          secretAccessKey: {{ requiredEnv "BACKUP_S3_SECRET_KEY" | toJson }}
+
+  - name: otel-client
+    namespace: otel
+    chart: ./charts/otel-client
+    needs: [cert-manager/cert-manager]
+    values:
+      - values/otel-client.yaml
+      - ca: {{ $ca | toJson }}
+        acme:
+          eab:
+            keyID: {{ requiredEnv "OTEL_CLIENT_EAB_KID" | toJson }}
+            hmac: {{ requiredEnv "OTEL_CLIENT_EAB_HMAC" | toJson }}
+
+  - name: otel-agent
+    namespace: otel
+    chart: ./upstream/opentelemetry-collector.tgz
+    needs: [registry/prepull, otel/otel-client]
+    values:
+      - values/otel.yaml
+      - values/otel-agent.yaml
+      - {{ $v.agent | toJson }}
+
+  - name: otel-cluster
+    namespace: otel
+    chart: ./upstream/opentelemetry-collector.tgz
+    needs: [registry/prepull, otel/otel-client]
+    values:
+      - values/otel.yaml
+      - values/otel-cluster.yaml
+      - {{ $v.cluster | toJson }}

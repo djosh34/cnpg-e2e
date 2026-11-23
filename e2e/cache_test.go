@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"crypto"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -17,8 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,24 +24,18 @@ import (
 	"github.com/djosh34/cnpg-e2e/e2e/images"
 	"github.com/djosh34/cnpg-e2e/e2e/registry"
 	"github.com/djosh34/cnpg-e2e/e2e/versions"
-	"github.com/go-acme/lego/v4/certcrypto"
-	"github.com/go-acme/lego/v4/certificate"
-	"github.com/go-acme/lego/v4/challenge/http01"
-	"github.com/go-acme/lego/v4/lego"
-	"github.com/go-acme/lego/v4/registration"
 	"github.com/regclient/regclient/types/errs"
 	"github.com/regclient/regclient/types/ref"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"go.yaml.in/yaml/v3"
 )
 
-// The cache is the lab after install.yml: a clean three-node k3s with no
-// charts and no app images, next to the store and the company CA. It is
-// one image per container: each node, the store and the CA, each committed
-// after a clean stop, as machines that shut down. The packages of this repo hold them, tagged by a hash of
-// everything that makes them (cacheTag). Only CI pushes them; a run that
-// finds no cache builds it here.
+// The cache is the lab after install.yml without its helmfile step: a clean
+// three-node k3s with no charts and no app images, next to the store and
+// the company CA. It is one image per container: each node, the store and
+// the CA, each committed after a clean stop, as machines that shut down.
+// The packages of this repo hold them, tagged by a hash of everything that
+// makes them (cacheTag). Only CI pushes them; a run that finds no cache
+// builds it here.
 //
 // The scenario cache makes sure the packages have the cache of this
 // checkout, building it when they do not, and with -push pushing it:
@@ -54,10 +43,10 @@ import (
 //	go -C e2e test -run '^TestScenario$' -count=1 -timeout 50m -v . -scenario cache -push
 //
 // The scenario restore starts the lab from the cache, pulled or built here,
-// and checks that the cluster is Ready, that upgrade.yml changes nothing on
-// a restored node, and that the CA issues a certificate. With -no-build it
-// fails where it would build the cache, as in CI, where the cache job
-// published it before.
+// checks that the cluster is Ready, fills the registry and runs upgrade.yml,
+// which applies every chart, and checks that the cluster is healthy, as a
+// scenario starts. With -no-build it fails where it would build the cache,
+// as in CI, where the cache job published it before.
 const (
 	cacheScenario   = "cache"
 	restoreScenario = "restore"
@@ -105,8 +94,9 @@ func cacheRef(name, tag string) string {
 }
 
 // cacheInputs are the files besides images/ and the versions file that make
-// what the cache holds: the playbooks, and the Go code that starts the lab,
-// names its machines and addresses, and sets up the store and the CA.
+// what the cache holds: the playbooks but the role helmfile, which the
+// cache leaves out, and the Go code that starts the lab, names its machines
+// and addresses, and sets up the store and the CA.
 var cacheInputs = []string{
 	"../ansible", "lab_test.go", "cache_test.go", "outside.go", "store.go", "ca.go", "nodes.go", "docker.go", "client.go",
 }
@@ -149,7 +139,7 @@ func cacheTag() (string, error) {
 				return err
 			}
 			// What download.yml writes next to the playbooks.
-			if d.IsDir() && path == "../ansible/downloads" {
+			if d.IsDir() && (path == "../ansible/downloads" || path == "../ansible/roles/helmfile") {
 				return fs.SkipDir
 			}
 			if d.IsDir() {
@@ -212,10 +202,10 @@ func testCache(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	}
 }
 
-// buildCache starts the lab with empty nodes, runs install.yml, waits
-// until every node is Ready, runs it again to check that it changes
-// nothing, and saves the lab as the cache. Its containers are gone when it
-// returns.
+// buildCache starts the lab with empty nodes, runs install.yml without its
+// helmfile step, waits until every node is Ready, runs it again to check
+// that it changes nothing, and saves the lab as the cache. Its containers
+// are gone when it returns.
 func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag string) {
 	built := t.Run("build the cache", func(t *testing.T) {
 		node, err := images.Get(ctx, "node")
@@ -230,8 +220,8 @@ func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag str
 			t.Fatal(err)
 		}
 		start := time.Now()
-		logf("running install.yml")
-		out, err := l.playbook(ctx, "install.yml")
+		logf("running install.yml without helmfile")
+		out, err := l.playbook(ctx, nil, "install.yml", "--skip-tags", "helmfile")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,7 +230,7 @@ func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag str
 			t.Fatal(err)
 		}
 		logf("running install.yml again, which changes nothing on the nodes")
-		out, err = l.playbook(ctx, "install.yml")
+		out, err = l.playbook(ctx, nil, "install.yml", "--skip-tags", "helmfile")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -303,10 +293,9 @@ func (l *lab) save(ctx context.Context, tag string) error {
 }
 
 // testRestore starts the lab from the cache of this checkout, pulled or
-// built here, and checks that every node turns Ready, that upgrade.yml
-// changes nothing on the nodes, and that the company CA issues a
-// certificate. It writes what it saw to
-// results/restore/report.txt.
+// built here, checks that every node turns Ready, then deploys every chart
+// with upgrade.yml and checks that the cluster is healthy. It writes what
+// it saw to results/restore/report.txt.
 func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 	tag, err := cacheTag()
 	if err != nil {
@@ -328,32 +317,12 @@ func testRestore(ctx context.Context, t *testing.T, m *versions.Manifest) {
 		t.Fatal(err)
 	}
 	logf("the cluster of the cache %s is Ready %s after the start", tag, time.Since(start).Round(time.Second))
-	report := fmt.Sprintf("The cache %s: every node Ready %s after the start.\n", tag, time.Since(start).Round(time.Second))
-
-	logf("running upgrade.yml, which changes nothing on the restored nodes")
-	out, err := l.playbook(ctx, "upgrade.yml")
+	report := fmt.Sprintf("The cache %s: every node Ready %s after the start.\n\n", tag, time.Since(start).Round(time.Second))
+	deployed, _, err := l.deploy(ctx, m, "upgrade.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := nodesUnchanged(out); err != nil {
-		t.Fatal(err)
-	}
-	report += "\nupgrade.yml:\n" + recap(out) + "\n"
-
-	logf("getting a certificate from the company CA")
-	cert, err := l.issue(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	report += fmt.Sprintf("\nThe company CA issued a certificate for %s, from %s, valid until %s.\n",
-		strings.Join(cert.DNSNames, ", "), cert.Issuer.CommonName, cert.NotAfter.UTC().Format(time.RFC3339))
-	t.Logf("%s", report)
-	if err := os.MkdirAll("../results/restore", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile("../results/restore/report.txt", []byte(report), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReport(t, restoreScenario, report+deployed)
 }
 
 // getCache returns the cache of tag: in Docker already, pulled from the
@@ -494,104 +463,3 @@ func nodesUnchanged(out string) error {
 	}
 	return nil
 }
-
-// issue gets a certificate for the client's name from the company CA as
-// the charts' issuers will: over ACME with a new EAB key, answering the
-// http-01 challenge from a web server at the client's address. It checks
-// that the certificate chains to the CA's root.
-func (l *lab) issue(ctx context.Context) (*x509.Certificate, error) {
-	image, err := images.Get(ctx, "controller")
-	if err != nil {
-		return nil, err
-	}
-	web, err := l.run(ctx, labContainer{
-		name: "client", ip: clientIP, image: image,
-		opts: []testcontainers.ContainerCustomizer{
-			testcontainers.WithCmd("sh", "-c", "mkdir -p /srv"+http01.ChallengePath("")+" && exec python3 -u -m http.server 80 --directory /srv"),
-			testcontainers.WithWaitStrategy(wait.ForLog("Serving HTTP")),
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	eab, err := l.bao.newEAB(ctx)
-	if err != nil {
-		return nil, err
-	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-	roots := x509.NewCertPool()
-	roots.AppendCertsFromPEM(l.root.certPEM)
-	// This machine has no DNS for the lab's names.
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	account := &acmeAccount{key: key}
-	config := lego.NewConfig(account)
-	config.CADirURL = acmeDirectory
-	config.Certificate.KeyType = certcrypto.EC256
-	config.HTTPClient = &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				if addr == acmeName+":443" {
-					addr = acmeIP + ":443"
-				}
-				return dialer.DialContext(ctx, network, addr)
-			},
-		},
-	}
-	client, err := lego.NewClient(config)
-	if err != nil {
-		return nil, err
-	}
-	if err := client.Challenge.SetHTTP01Provider(challengeFiles{ctx: ctx, web: web}); err != nil {
-		return nil, err
-	}
-	account.registration, err = client.Registration.RegisterWithExternalAccountBinding(registration.RegisterEABOptions{
-		TermsOfServiceAgreed: true, Kid: eab.id, HmacEncoded: eab.key,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("registering the ACME account: %w", err)
-	}
-	res, err := client.Certificate.Obtain(certificate.ObtainRequest{Domains: []string{clientName}})
-	if err != nil {
-		return nil, err
-	}
-	block, _ := pem.Decode(res.Certificate)
-	if block == nil {
-		return nil, errors.New("the certificate is not PEM")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: clientName}); err != nil {
-		return nil, err
-	}
-	return cert, nil
-}
-
-// challengeFiles answers http-01 challenges with files in the web server's
-// directory.
-type challengeFiles struct {
-	ctx context.Context
-	web *testcontainers.DockerContainer
-}
-
-func (c challengeFiles) Present(_, token, keyAuth string) error {
-	return c.web.CopyToContainer(c.ctx, []byte(keyAuth), "/srv"+http01.ChallengePath(token), 0o644)
-}
-
-func (c challengeFiles) CleanUp(_, _, _ string) error { return nil }
-
-// acmeAccount is the ACME account of issue.
-type acmeAccount struct {
-	key          crypto.PrivateKey
-	registration *registration.Resource
-}
-
-func (a *acmeAccount) GetEmail() string                        { return "" }
-func (a *acmeAccount) GetRegistration() *registration.Resource { return a.registration }
-func (a *acmeAccount) GetPrivateKey() crypto.PrivateKey        { return a.key }

@@ -1,0 +1,21 @@
+# Distribution v3, by tag and digest: registry.image of the versions file.
+# A new node has it before any registry runs: Ansible puts its archive into
+# the k3s images directory, which k3s imports.
+image: ""
+
+# The bucket of the S3 store that the fill writes the images to, through a
+# writable Distribution with the same settings and http.secret.
+s3:
+  endpoint: https://s3.example.com
+  region: us-east-1
+  bucket: registry
+  # Keys that may read the bucket.
+  accessKey: ""
+  secretKey: ""
+
+# Distribution's http.secret, the same as the writer's.
+httpSecret: ""
+
+# The CA, PEM, that signs the store's certificate. Empty when that
+# certificate is publicly trusted.
+ca: ""

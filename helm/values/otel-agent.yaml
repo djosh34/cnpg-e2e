@@ -1,0 +1,54 @@
+# The release otel-agent, on top of otel.yaml: one collector per node.
+fullnameOverride: otel  # the DaemonSet is otel-agent
+mode: daemonset
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: [pods, nodes]
+      verbs: [get, list, watch]
+    - apiGroups: [""]
+      resources: [nodes/metrics]
+      verbs: [get]
+alternateConfig:
+  receivers:
+    prometheus:
+      config:
+        scrape_configs:
+          # Every 5 s: CNPGWritesBlocked must see a wait of 10 s. The
+          # metrics are plain HTTP, CNPG's default.
+          - job_name: cnpg
+            scrape_interval: 5s
+            scrape_timeout: 5s
+            kubernetes_sd_configs:
+              - role: pod
+                namespaces: {names: [databases]}
+                selectors:
+                  - {role: pod, field: "spec.nodeName=${env:OTEL_K8S_NODE_NAME}"}
+            relabel_configs:
+              - {source_labels: [__meta_kubernetes_pod_label_cnpg_io_podRole], regex: instance, action: keep}
+              - {source_labels: [__meta_kubernetes_pod_container_port_number], regex: "9187", action: keep}
+              - {source_labels: [__meta_kubernetes_namespace], target_label: namespace}
+              - {source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+              - {source_labels: [__meta_kubernetes_pod_label_cnpg_io_cluster], target_label: cluster}
+              - {source_labels: [__meta_kubernetes_pod_node_name], target_label: node}
+          # The kubelet signs its serving certificate with the cluster's CA.
+          - job_name: kubelet
+            scrape_interval: 15s
+            scheme: https
+            authorization: {credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token}
+            tls_config: {ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}
+            kubernetes_sd_configs: &node
+              - role: node
+                selectors:
+                  - {role: node, field: "metadata.name=${env:OTEL_K8S_NODE_NAME}"}
+            relabel_configs: &nodeLabel
+              - {source_labels: [__meta_kubernetes_node_name], target_label: node}
+          - job_name: cadvisor
+            scrape_interval: 15s
+            scheme: https
+            metrics_path: /metrics/cadvisor
+            authorization: {credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token}
+            tls_config: {ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt}
+            kubernetes_sd_configs: *node
+            relabel_configs: *nodeLabel

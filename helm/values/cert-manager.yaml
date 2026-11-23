@@ -1,0 +1,5 @@
+# The release cert-manager, of the cert-manager chart. Everything else is
+# the chart's default: one pod each.
+# The CRDs, so one install gives a working cert-manager.
+crds:
+  enabled: true

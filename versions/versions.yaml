@@ -61,32 +61,28 @@ tools:
     url: https://raw.githubusercontent.com/k3s-io/k3s/v1.37.2%2Bk3s1/contrib/util/rotate-default-ca-certs.sh
     sha256: 62ef79f530cd285b3cfce884746abe6c3712ad70d0ef66e81f76aaa93c30551b
 
-# The charts, as OCI charts, by version and by the digest of their OCI
-# manifest. The run writes each into the dependency of its wrapper chart, and
-# helm dependency build pulls it. name is the package's chart, and alias the
-# wrapper's dependency name, under which its values stay.
+# The upstream charts, as OCI charts, by version and by the digest of their
+# OCI manifest. name is the package's chart. The controller fetches each by
+# its digest, and helm/helmfile.yaml.gotmpl installs it from that file,
+# upstream/<key>.tgz next to it.
 charts:
   cert-manager:
     name: cert-manager-chart
-    alias: cert-manager
     repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "1.21.3"
     digest: sha256:d7c2de29812898cd64ca1745628df37b78da74b7e21dfac4e5628b6407235b42
   cloudnative-pg:
     name: cloudnative-pg-chart
-    alias: cloudnative-pg
     repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.29.2"
     digest: sha256:9089c1dea04e7b664cb641b26191574fd33900d3ca6fe0790824c3ccff18cdfa
   opentelemetry-collector:
     name: opentelemetry-collector-chart
-    alias: opentelemetry-collector
     repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.180.0"
     digest: sha256:6ad21aa35bd7f3c699690656fbde7f5b9845bb7f5d869d593f5f5a8a324b6cb0
   plugin-barman-cloud:
     name: plugin-barman-cloud
-    alias: plugin-barman-cloud
     repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.9.0"
     digest: sha256:d34ada2eedffaee9153c6ae31e0e5b93fd28765cc8fba7c5fb45d4ed6b60df1a
@@ -98,7 +94,7 @@ registry:
 prepull:
   image: ghcr.io/djosh34/cnpg-e2e/kubernetes-pause:3.10.2@sha256:19906bc2350b1f030e4803b58de88198d43e79394e99c7d34463c9aaead13521
 
-# The instance images, which the cnpg-cluster charts read. The rollout
+# The instance images, which the cnpg-cluster chart reads. The rollout
 # scenario starts on rolloutFrom, an older build, and rolls out to
 # imageName. Both name postgres 70, so the cluster gets that uid and gid.
 postgresql:
@@ -107,9 +103,10 @@ postgresql:
   postgresUID: 70
   postgresGID: 70
 
-# The images of the charts, each under its wrapper chart's dependency name
-# and in the chart's own values, pinned by digest. The DHI charts default to
-# the registry dhi.io, so each block that has registry sets it.
+# The images of the upstream charts, each block in its chart's own values,
+# pinned by digest: helm/helmfile.yaml.gotmpl gives each release its block.
+# The DHI charts default to the registry dhi.io, so each block that has
+# registry sets it.
 cert-manager:
   image:
     registry: ghcr.io
@@ -157,11 +154,10 @@ plugin-barman-cloud:
     repository: djosh34/cnpg-e2e/cloudnative-pg-plugin-barman-cloud-sidecar
     tag: "0.16.0@sha256:d389ad25d9bb9a92eb0f6262618551a8ac9b1b149df73e8ce584fb18392719e9"
 
-# The two collectors of the cnpg-opentelemetry-collector chart, both the
-# opentelemetry-collector chart, on DHI's contrib build. The wrapper
-# starts otelcol-k8s, which this image does not have: an empty command.name
-# leaves the command out, so the image's own entrypoint, otelcol-contrib,
-# runs.
+# The two collectors, the releases otel-agent and otel-cluster, both of the
+# opentelemetry-collector chart, on DHI's contrib build. The chart starts
+# otelcol-k8s, which this image does not have: an empty command.name leaves
+# the command out, so the image's own entrypoint, otelcol-contrib, runs.
 agent:
   command:
     name: ""

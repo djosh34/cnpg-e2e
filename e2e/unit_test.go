@@ -93,28 +93,6 @@ func TestStartedBefore(t *testing.T) {
 	}
 }
 
-func TestReadReleases(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "releases.yaml")
-	write := func(content string) {
-		if err := os.WriteFile(file, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("- name: pg\n  namespace: databases\n  chart: cnpg-cluster\n  values: [values/cluster.yaml]\n")
-	got, err := readReleases(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0].Chart != "cnpg-cluster" || len(got[0].Values) != 1 {
-		t.Errorf("got %+v", got)
-	}
-	write("- name: pg\n  chart: cnpg-cluster\n")
-	if _, err := readReleases(file); err == nil {
-		t.Error("a release without namespace: no error")
-	}
-}
-
 func TestLookup(t *testing.T) {
 	s := &scenario{roles: map[string]string{"the primary": "pg-1", "replica 1": "pg-2", "replica 2": "pg-3"}}
 	key, a, err := s.lookup("replica 1", "promoted")
@@ -252,32 +230,6 @@ func TestFeaturesUseTheVocabulary(t *testing.T) {
 		if tags[i] == tags[i-1] {
 			t.Errorf("the tag @%s is on more than one scenario", tags[i])
 		}
-	}
-}
-
-// ansible/k3s/patches.yaml reads, and patches CoreDNS to one pod per node.
-func TestK3sPatches(t *testing.T) {
-	patches, err := readK3sPatches("../ansible/k3s/patches.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	coredns := slices.ContainsFunc(patches, func(p k3sPatch) bool {
-		spec, ok := p.Patch["spec"].(map[string]any)
-		return ok && p.Target == "deployment/coredns" && spec["replicas"] == 3
-	})
-	if !coredns {
-		t.Errorf("patches.yaml: no 3 CoreDNS replicas in %+v", patches)
-	}
-	dir := t.TempDir()
-	file := filepath.Join(dir, "patches.yaml")
-	if err := os.WriteFile(file, []byte("- target: coredns\n  namespace: kube-system\n  patch: {spec: {replicas: 3}}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readK3sPatches(file); err == nil {
-		t.Error("a target without its kind: no error")
-	}
-	if patches, err := readK3sPatches(filepath.Join(dir, "none.yaml")); err != nil || patches != nil {
-		t.Errorf("no file: %v, %v", patches, err)
 	}
 }
 

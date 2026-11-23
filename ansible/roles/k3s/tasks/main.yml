@@ -1,8 +1,9 @@
 # Writes every file k3s reads on a node and copies the binary, the install
-# script and the airgap tarball from the controller. Then it starts k3s, or
-# restarts it when the binary or a file k3s reads at start changed, and
-# waits until the node is an etcd voter. A manifest that changed needs no
-# restart: k3s applies it when the file changes.
+# script, the airgap tarball and the registry's image from the controller.
+# Then it starts k3s, or restarts it when the binary or a file k3s reads at
+# start changed, and waits until the node is an etcd voter. A manifest or
+# an image archive that changed needs no restart: k3s takes it when the file
+# changes. Last, once every node runs, it makes CoreDNS one pod per node.
 
 - name: Make the directories of k3s
   ansible.builtin.file:
@@ -34,6 +35,15 @@
     src: "{{ downloads }}/k3s-airgap-images-amd64.tar.zst"
     dest: /var/lib/rancher/k3s/agent/images/
     mode: "0644"
+
+# The image of the registry chart, which no registry can serve before it
+# runs. Tagged helmfile, so k3s alone, as in the cache, has no app image.
+- name: Copy the registry's image, which k3s imports
+  ansible.builtin.copy:
+    src: "{{ downloads }}/registry.tar"
+    dest: /var/lib/rancher/k3s/agent/images/
+    mode: "0644"
+  tags: [helmfile]
 
 - name: Read the cluster's token from the first node
   ansible.builtin.slurp:
@@ -123,3 +133,20 @@
       {{ k3s_binary is changed or k3s_config is changed or k3s_registries is changed or k3s_resolv is changed
          or k3s_unit.results | map(attribute='stat.checksum', default='') | list
             != k3s_unit_now.results | map(attribute='stat.checksum', default='') | list }}
+
+# One CoreDNS pod per node, so a lost node takes no name lookups with it.
+# k3s's own manifest of CoreDNS sets no replicas, so the count holds across
+# restarts and upgrades. k3s makes the Deployment a little after it starts.
+- name: Look at the number of CoreDNS pods
+  ansible.builtin.command: k3s kubectl --namespace kube-system get deployment coredns --output jsonpath={.spec.replicas}
+  register: coredns
+  until: coredns is succeeded
+  retries: 60
+  delay: 5
+  changed_when: false
+  when: inventory_hostname == groups['nodes'][-1]
+
+- name: Run one CoreDNS pod per node
+  ansible.builtin.command: k3s kubectl --namespace kube-system scale deployment coredns --replicas {{ groups['nodes'] | length }}
+  changed_when: true
+  when: inventory_hostname == groups['nodes'][-1] and coredns.stdout != groups['nodes'] | length | string

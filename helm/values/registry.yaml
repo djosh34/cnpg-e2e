@@ -1,0 +1,7 @@
+# The release registry: the store of the e2e test, under its own name, and
+# its registry bucket. helmfile.yaml.gotmpl adds the image, the keys and the
+# company CA, which signs the store's certificate.
+s3:
+  endpoint: https://s3.example.test
+  region: us-east-1
+  bucket: registry

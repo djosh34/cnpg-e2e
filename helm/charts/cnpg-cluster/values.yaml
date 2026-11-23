@@ -20,27 +20,35 @@ cluster:
   # of 4.5 GiB.
   walSegmentSize: 1
 
+# The CAs, PEM, that may sign client certificates, in the Secret caSecret,
+# which CNPG also uses as the server CA: the CA of the issuers below.
+ca: ""
+
 # The ACME CA that issues the server and replication certificates. Each
-# Certificate gets its own Issuer and ACME account: the Issuer <cluster>-server
-# with the EAB key in the Secret <cluster>-server-acme-eab, and the same for
-# <cluster>-replication. Each Secret has keyID and secret, and is created
-# outside the chart. caSecret is a Secret whose ca.crt signs the ACME server's
-# certificate; empty when that certificate is publicly trusted.
+# Certificate gets its own Issuer and ACME account, with its own EAB key of
+# the ACME CA: the Issuer <cluster>-server with eab.server, and
+# <cluster>-replication with eab.replication. ca is the CA, PEM, that signs
+# the ACME server's certificate; empty when that certificate is publicly
+# trusted.
 acme:
   server: https://acme.example.com/directory
-  caSecret: ""
+  ca: ""
+  eab:
+    server: {keyID: "", hmac: ""}
+    replication: {keyID: "", hmac: ""}
   # The http-01 challenges go through this ingress class: k3s's Traefik, on
   # port 80 of every node.
   ingressClassName: traefik
-
-# The pod ranges and node tunnel addresses in the NetworkPolicy come from the
-# nodes' spec.podCIDR.
 
 # barman-cloud object store for WAL archive and backups.
 objectStore:
   destinationPath: s3://example-bucket/
   endpointURL: https://s3.example.com
-  credentialsSecret: backup-creds  # keys ACCESS_KEY_ID and ACCESS_SECRET_KEY
+  # The keys of the object store, which the chart puts into the Secret
+  # credentialsSecret.
+  credentialsSecret: backup-creds
+  accessKeyID: ""
+  secretAccessKey: ""
   # The Secret and key with the CA that signed the store's certificate, as
   # {name, key}. Empty when the store's certificate is publicly trusted.
   endpointCA: {}
@@ -48,6 +56,10 @@ objectStore:
   # after 5 s, with one attempt, instead of 60 s and 5 attempts.
   readTimeout: 5  # --read-timeout of every WAL archive and restore call
   maxAttempts: 1  # AWS_MAX_ATTEMPTS in the plugin's sidecar
+
+# When the daily base backup runs, as CNPG's six-field cron schedule. A new
+# cluster also takes one at once.
+backupSchedule: "0 0 3 * * *"
 
 # true: bootstrap by restoring the backups of sourceCluster instead of initdb.
 recovery:

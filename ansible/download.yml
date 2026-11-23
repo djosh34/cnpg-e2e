@@ -1,7 +1,9 @@
 # Downloads to the controller every file that the playbooks copy to the
 # nodes, from the URLs of the versions file, each checked by its sha256,
-# and unpacks the archives. The nodes have no internet; the controller does.
-# A file that is already there with its sha256 is not downloaded again.
+# and unpacks the archives. A file that is already there with its sha256 is
+# not downloaded again. Then, with regctl, it fetches the upstream charts and
+# the registry's image from their packages, each by its digest. The nodes
+# have no internet; the controller does.
 - name: Download the files of the nodes
   hosts: localhost
   connection: local
@@ -19,7 +21,7 @@
         path: "{{ downloads }}/{{ item }}"
         state: directory
         mode: "0755"
-      loop: ["", helm, helm-diff, helmfile]
+      loop: ["", helm, helm-diff, helmfile, charts]
 
     - name: Download
       ansible.builtin.get_url:
@@ -45,3 +47,21 @@
         dest: "{{ downloads }}/{{ item }}"
         remote_src: true
       loop: [helm, helm-diff, helmfile]
+
+    # A new node imports it from the k3s images directory, so the registry
+    # can start before any registry runs.
+    - name: Export the registry's image as an archive
+      ansible.builtin.command: regctl image export {{ versions.registry.image }} {{ downloads }}/registry.tar
+      changed_when: true
+      tags: [helmfile]
+
+    - name: Fetch the upstream charts
+      ansible.builtin.shell: >-
+        regctl artifact get --file-media-type application/vnd.cncf.helm.chart.content.v1.tar+gzip
+        {{ item.value.repository | regex_replace('^oci://', '') }}/{{ item.value.name }}@{{ item.value.digest }}
+        >{{ downloads }}/charts/{{ item.key }}.tgz
+      loop: "{{ versions.charts | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      changed_when: true
+      tags: [helmfile]

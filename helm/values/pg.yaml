@@ -1,13 +1,14 @@
 # The e2e test's values for the release pg, on top of cluster.yaml. The company
 # CA approves only the node names, and the store has a certificate of that CA.
+# helmfile.yaml.gotmpl adds the CA and the keys.
 acme:
   server: https://acme.example.test/v1/pki/acme/directory
-  caSecret: company-ca
 replication:
   commonName: k3s-1.example.test
   dnsNames: [k3s-1.example.test, k3s-2.example.test, k3s-3.example.test]
 objectStore:
   endpointURL: https://s3.example.test
+  # The company CA, in the Secret the chart makes.
   endpointCA:
-    name: s3-ca
+    name: client-ca
     key: ca.crt

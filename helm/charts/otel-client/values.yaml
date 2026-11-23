@@ -1,0 +1,19 @@
+# The names of the collectors' client certificate, in the Secret
+# otel-client. The first is its CN. The CA issues only approved names.
+dnsNames: []
+
+# The company CA, PEM, in the Secret company-ca: it signs the ACME server's
+# certificate and the upstream URL's, which the collectors check.
+ca: ""
+
+# The company's ACME CA. The Issuer otel-client registers its own account
+# with the EAB key, keyID and hmac, and keeps the account key in the Secret
+# otel-client-acme-account.
+acme:
+  server: https://acme.example.com/directory
+  eab:
+    keyID: ""
+    hmac: ""
+  # The http-01 challenges go through this ingress class: k3s's Traefik, on
+  # port 80 of every node.
+  ingressClassName: traefik

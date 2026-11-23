@@ -1,0 +1,51 @@
+{{- $ns := .Release.Namespace }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: company-ca
+  namespace: {{ $ns }}
+stringData:
+  ca.crt: {{ required "ca is required" .Values.ca | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: otel-client-acme-eab
+  namespace: {{ $ns }}
+stringData:
+  secret: {{ required "acme.eab.hmac is required" .Values.acme.eab.hmac | quote }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: otel-client
+  namespace: {{ $ns }}
+spec:
+  acme:
+    server: {{ .Values.acme.server }}
+    caBundle: {{ .Values.ca | b64enc }}
+    privateKeySecretRef:
+      name: otel-client-acme-account
+    externalAccountBinding:
+      keyID: {{ required "acme.eab.keyID is required" .Values.acme.eab.keyID | quote }}
+      keySecretRef:
+        name: otel-client-acme-eab
+        key: secret
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: {{ .Values.acme.ingressClassName }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: otel-client
+  namespace: {{ $ns }}
+spec:
+  secretName: otel-client
+  commonName: {{ first (required "dnsNames is required" .Values.dnsNames) }}
+  dnsNames: {{ toJson .Values.dnsNames }}
+  usages: [client auth]
+  issuerRef:
+    kind: Issuer
+    name: otel-client

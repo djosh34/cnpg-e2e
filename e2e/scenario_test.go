@@ -28,8 +28,8 @@ var scenarioFlag = flag.String("scenario", "", "the scenario to run: its tag, wi
 //	go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario <scenario>
 //
 // It builds e2e/Dockerfile from this checkout for the machine's own
-// architecture, with the tools of the versions file, copies the charts,
-// values, k3s files, feature files and the versions file in and runs the
+// architecture, with the tools of the versions file, copies the k3s files,
+// feature files and the versions file in and runs the
 // image as one privileged container. Its last step copies the
 // run's files out to results/. testcontainers removes the container and its
 // volumes when the test ends, and Ryuk does when the test is killed. Without
@@ -65,7 +65,6 @@ func TestScenario(t *testing.T) {
 	// testcontainers puts a directory under the parent of ContainerFilePath
 	// with its own name, so each name is the same on both sides.
 	files := []testcontainers.ContainerFile{
-		{HostFilePath: "../helm", ContainerFilePath: helmDir, FileMode: 0o755},
 		{HostFilePath: "../ansible/k3s", ContainerFilePath: k3sDir, FileMode: 0o755},
 		{HostFilePath: "features", ContainerFilePath: featuresDir, FileMode: 0o755},
 		{HostFilePath: versionsFile, ContainerFilePath: manifestFile, FileMode: 0o644},
@@ -124,6 +123,7 @@ var labScenarios = map[string]func(context.Context, *testing.T, *versions.Manife
 	airgapScenario:  testAirgap,
 	cacheScenario:   testCache,
 	restoreScenario: testRestore,
+	installScenario: testInstall,
 }
 
 // hostSetup loads br_netfilter, which the nodes need and cannot load

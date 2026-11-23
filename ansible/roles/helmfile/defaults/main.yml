@@ -1,0 +1,25 @@
+# Where download.yml put the files on the controller.
+downloads: "{{ playbook_dir }}/downloads"
+
+# Where the node keeps helm/ and the versions file of the checkout, and the
+# upstream charts, for helmfile.
+deploy_dir: /opt/deploy
+
+# The variables of the controller's environment that helmfile reads: the
+# company CA and the charts' secrets. They never land on a disk: Ansible
+# puts them on the command line of the task over SSH, which sets them as
+# helmfile's environment. So while helmfile runs, ps shows them to a user of
+# the controller or of the first node; only root logs in to a node.
+helmfile_env:
+  - COMPANY_CA
+  - REGISTRY_HTTP_SECRET
+  - REGISTRY_S3_ACCESS_KEY
+  - REGISTRY_S3_SECRET_KEY
+  - BACKUP_S3_ACCESS_KEY
+  - BACKUP_S3_SECRET_KEY
+  - PG_SERVER_EAB_KID
+  - PG_SERVER_EAB_HMAC
+  - PG_REPLICATION_EAB_KID
+  - PG_REPLICATION_EAB_HMAC
+  - OTEL_CLIENT_EAB_KID
+  - OTEL_CLIENT_EAB_HMAC
