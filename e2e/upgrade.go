@@ -202,6 +202,9 @@ func withK3s(data, current []byte) ([]byte, error) {
 	if err := yaml.Unmarshal(current, &k3s); err != nil {
 		return nil, err
 	}
+	if file == nil {
+		return nil, errors.New("the versions file is empty")
+	}
 	file["k3s"] = k3s["k3s"]
 	return yaml.Marshal(file)
 }
@@ -383,13 +386,14 @@ func onVersionsFile(ctx context.Context, s *scenario, _ args) error {
 	return nil
 }
 
-// primaryPod is the cluster's primary and the UID of its pod, which a
-// restart changes.
+// primaryPod is the cluster's primary, the UID of its pod and the restart
+// count of its postgres container, one of which a restart changes.
 func primaryPod(ctx context.Context) (string, error) {
 	primary, err := clusterStatus(ctx, clusterName, "currentPrimary")
 	if err != nil {
 		return "", err
 	}
-	uid, err := kubectl(ctx, "get", "pod", primary, "-n", namespace, "-o", "jsonpath={.metadata.uid}")
-	return primary + " " + uid, err
+	pod, err := kubectl(ctx, "get", "pod", primary, "-n", namespace, "-o",
+		`jsonpath={.metadata.uid} {.status.containerStatuses[?(@.name=="postgres")].restartCount}`)
+	return primary + " " + pod, err
 }

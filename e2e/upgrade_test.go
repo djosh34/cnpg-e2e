@@ -56,4 +56,9 @@ func TestWithK3s(t *testing.T) {
 	if got.K3s.Version != m.K3s.Version || !strings.HasSuffix(got.PostgreSQL.ImageName, strings.Repeat("7", 64)) {
 		t.Errorf("got k3s %s and %s", got.K3s.Version, got.PostgreSQL.ImageName)
 	}
+	for _, empty := range []string{"", "null\n"} {
+		if _, err := withK3s([]byte(empty), data); err == nil {
+			t.Errorf("%q: want an error", empty)
+		}
+	}
 }
