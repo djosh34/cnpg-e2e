@@ -278,9 +278,7 @@ ethernets:
       macaddress: "%s"
     set-name: eth0
     addresses: [%s/%d]
-    routes:
-      - to: default
-        via: %s
+    gateway4: %s
     nameservers:
       addresses: [%s]
 `, mac, nodeIP(i), netip.MustParsePrefix(subnet).Bits(), gatewayIP, dnsIP)
@@ -297,7 +295,8 @@ ethernets:
 				h.Privileged = true
 				h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeVolume, Target: "/disk"})
 			}),
-			testcontainers.WithWaitStrategy(wait.ForLog(vmUp).WithStartupTimeout(5 * time.Minute)),
+			// WithWaitStrategy would give up after 1 min.
+			testcontainers.WithWaitStrategyAndDeadline(5*time.Minute, wait.ForLog(vmUp)),
 		},
 	})
 }
