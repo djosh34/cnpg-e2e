@@ -319,11 +319,8 @@ func backedUp(ctx context.Context) error {
 	}
 	l, n, _ := strings.Cut(out, " ")
 	last, err := time.Parse(time.RFC3339, l)
-	if err != nil {
-		return fmt.Errorf("the schedule of %s: %q", clusterName, out)
-	}
-	next, err := time.Parse(time.RFC3339, n)
-	if err != nil {
+	next, err2 := time.Parse(time.RFC3339, n)
+	if err != nil || err2 != nil {
 		return fmt.Errorf("the schedule of %s: %q", clusterName, out)
 	}
 	due := last

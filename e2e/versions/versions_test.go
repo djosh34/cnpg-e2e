@@ -31,7 +31,11 @@ func TestRepository(t *testing.T) {
 // Every image and chart of the cluster is one of this repo's packages, and
 // the lab is complete.
 func TestVersionsFile(t *testing.T) {
-	m, err := Load(file)
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(data)
 	if err != nil {
 		t.Fatal(err)
 	}

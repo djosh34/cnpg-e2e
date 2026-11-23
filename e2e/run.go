@@ -96,10 +96,8 @@ func (s *scenario) tearDown(err error) error {
 	}
 	s.failure = err
 	// The files may take 50 s past the run's deadline.
-	keep, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), 50*time.Second)
-	if deadline, ok := s.ctx.Deadline(); ok {
-		keep, cancel = context.WithDeadline(context.WithoutCancel(s.ctx), deadline.Add(50*time.Second))
-	}
+	deadline, _ := s.ctx.Deadline()
+	keep, cancel := context.WithDeadline(context.WithoutCancel(s.ctx), deadline.Add(50*time.Second))
 	defer cancel()
 	var fault error
 	if s.clientRan {

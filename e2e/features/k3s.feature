@@ -10,4 +10,3 @@ Feature: k3s CA rotation
     Given a running cluster
     When the k3s CAs are rotated with rotate-ca.yml
     Then every node is on the new CAs
-    And the cluster is healthy

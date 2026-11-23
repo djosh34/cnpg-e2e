@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/x509"
@@ -8,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -16,9 +18,10 @@ import (
 )
 
 // The cache is a running cluster that install saved on a commit of main:
-// an image of each node, the store and the CA, committed after a clean
-// stop. A run starts from the cache of its merge base with main and runs
-// install.yml on it, which catches it up.
+// an image of each node, the store and the CA, committed once k3s-killall.sh
+// stopped every container, a crash-consistent copy. A run starts from the
+// cache of its merge base with main and runs install.yml on it, which
+// catches it up.
 
 // cachedNames are the containers the cache holds.
 var cachedNames = []string{"s3", "acme", "k3s-1", "k3s-2", "k3s-3"}
@@ -71,7 +74,7 @@ func pull(ctx context.Context, commit string) (*cached, error) {
 	return c, nil
 }
 
-// save writes a row into the database, stops the cluster cleanly and
+// save writes a row into the database, stops the cluster and
 // pushes it as the cache of the merge base, which on main is the commit
 // itself. A restored cluster reads the row back.
 func (s *scenario) save(ctx context.Context) error {
@@ -130,28 +133,29 @@ func (s *scenario) save(ctx context.Context) error {
 
 // withStorage copies the node's storage volume, which docker commit leaves
 // out, into its image at the same path: a new volume there starts with it.
-func withStorage(ctx context.Context, node, image string) error {
+func withStorage(ctx context.Context, node, image string) (err error) {
 	layer := node + "-save"
 	if _, err := command(ctx, "docker", "create", "--name", layer, image); err != nil {
 		return err
 	}
-	from := exec.CommandContext(ctx, "docker", "cp", node+":"+storageDir, "-")
-	to := exec.CommandContext(ctx, "docker", "cp", "--archive", "-", layer+":/var/lib/rancher/k3s/")
-	pipe, err := from.StdoutPipe()
+	defer func() {
+		_, rmErr := command(context.WithoutCancel(ctx), "docker", "rm", layer)
+		err = errors.Join(err, rmErr)
+	}()
+	r, w, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	to.Stdin = pipe
-	if err := from.Start(); err != nil {
-		return err
-	}
-	out, err := to.CombinedOutput()
-	if err := errors.Join(err, from.Wait()); err != nil {
-		return fmt.Errorf("copying the storage of %s: %w: %s", node, err, out)
+	var out bytes.Buffer
+	from := exec.CommandContext(ctx, "docker", "cp", node+":"+storageDir, "-")
+	to := exec.CommandContext(ctx, "docker", "cp", "--archive", "-", layer+":/var/lib/rancher/k3s/")
+	from.Stdout, from.Stderr, to.Stdin, to.Stdout, to.Stderr = w, &out, r, &out, &out
+	err = errors.Join(from.Start(), to.Start(), w.Close(), r.Close())
+	if err = errors.Join(err, from.Wait(), to.Wait()); err != nil {
+		return fmt.Errorf("copying the storage of %s: %w: %s", node, err, out.String())
 	}
 	_, err = command(ctx, "docker", "commit", layer, image)
-	_, rmErr := command(ctx, "docker", "rm", layer)
-	return errors.Join(err, rmErr)
+	return err
 }
 
 // ready waits until every node is Ready with a heartbeat from after since:

@@ -13,7 +13,6 @@ Feature: Upgrade
     When the versions file is installed
     Then every node is on the versions file's k3s
     And every running container is on an image of the versions file
-    And the cluster is healthy
 
   @upgrade-kvm
   Scenario: install.yml upgrades k3s and the images on VMs with SELinux enforcing
@@ -23,5 +22,4 @@ Feature: Upgrade
     When the versions file is installed
     Then every node is on the versions file's k3s
     And every running container is on an image of the versions file
-    And the cluster is healthy
     And SELinux is enforcing

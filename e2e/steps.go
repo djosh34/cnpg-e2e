@@ -421,7 +421,7 @@ func (s *scenario) measure(key string, w word, n, forN string) error {
 			limit = s.writeLimit
 		}
 	case "reading | healthy":
-		if s.primaryOut {
+		if s.primaryOut && n == "" {
 			limit = vocabulary["writing | healthy"].limit
 			if s.writeLimit > 0 {
 				limit = s.writeLimit

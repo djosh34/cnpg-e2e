@@ -5,7 +5,6 @@ package versions
 import (
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -85,18 +84,6 @@ type Tool struct {
 // An exact chart version, not a range, which helm would resolve to a newer
 // chart.
 var exactVersion = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
-
-func Load(file string) (*Manifest, error) {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return nil, err
-	}
-	m, err := Parse(data)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", file, err)
-	}
-	return m, nil
-}
 
 // Parse reads a versions file and checks that each chart has an exact
 // version and each image of the cluster a digest.

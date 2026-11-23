@@ -56,7 +56,7 @@ func Run(ctx context.Context, data []byte, host string, plainHTTP bool) error {
 		if f.d.URL == "" || f.d.SHA256 == "" {
 			return fmt.Errorf("no %s with url and sha256 in %s", f.key, versions.File)
 		}
-		if err := download(ctx, f.d, filepath.Join(Dir, f.name)); err != nil {
+		if err := Download(ctx, f.d, filepath.Join(Dir, f.name)); err != nil {
 			return err
 		}
 	}
@@ -65,7 +65,7 @@ func Run(ctx context.Context, data []byte, host string, plainHTTP bool) error {
 		if name == "helm-diff" {
 			archive = filepath.Join(Dir, name+".tgz")
 		}
-		if err := untar(archive, filepath.Join(Dir, name)); err != nil {
+		if err := Untar(archive, filepath.Join(Dir, name)); err != nil {
 			return err
 		}
 	}
@@ -92,9 +92,9 @@ func Run(ctx context.Context, data []byte, host string, plainHTTP bool) error {
 	return registry.Copy(ctx, rc, m.Pinned, host)
 }
 
-// download fetches d into file and checks its sha256, unless file has it
+// Download fetches d into file and checks its sha256, unless file has it
 // already.
-func download(ctx context.Context, d versions.Download, file string) error {
+func Download(ctx context.Context, d versions.Download, file string) error {
 	if data, err := os.ReadFile(file); err == nil && sum(data) == d.SHA256 {
 		return nil
 	}
@@ -125,8 +125,8 @@ func sum(data []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
-// untar unpacks a tar.gz archive into dir, anew.
-func untar(archive, dir string) error {
+// Untar unpacks a tar.gz archive into dir, anew.
+func Untar(archive, dir string) error {
 	data, err := os.ReadFile(archive)
 	if err != nil {
 		return err
