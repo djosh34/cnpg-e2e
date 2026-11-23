@@ -421,14 +421,11 @@ func (l *lab) ready(ctx context.Context, since time.Time) error {
 	query := `jsonpath={range .items[*]}{.metadata.name} {.status.conditions[?(@.type=="Ready")].status} ` +
 		`{.status.conditions[?(@.type=="Ready")].lastHeartbeatTime}{"\n"}{end}`
 	err := poll(ctx, time.Now().Add(5*time.Minute), func(ctx context.Context) error {
-		code, out, err := execIn(ctx, l.nodes[0], []string{"k3s", "kubectl", "get", "nodes", "-o", query})
+		out, err := l.kubectl(ctx, "get", "nodes", "-o", query)
 		if err != nil {
 			return err
 		}
-		if code != 0 {
-			return fmt.Errorf("kubectl get nodes: exit code %d: %s", code, out)
-		}
-		lines := strings.Split(strings.TrimSpace(out), "\n")
+		lines := strings.Split(out, "\n")
 		if len(lines) != nodeCount {
 			return fmt.Errorf("%d nodes, not %d: %s", len(lines), nodeCount, out)
 		}
