@@ -3,7 +3,7 @@
 # and /tmp, and copies root's authorized_keys in. Ansible needs python3,
 # which the base image has; k3s-killall.sh needs ps, and k3s's script that
 # makes new CAs openssl, as a Rocky Linux machine has.
-FROM quay.io/rockylinux/rockylinux:9.9@sha256:bb5755f96bec05ff26165e779ec843d7167544be9e50770508f307019a6d05c4
+FROM quay.io/rockylinux/rockylinux:9.9@sha256:7b2eba7b6bf1c5c93f343c5f03a582e4e32ffd7c19187010c6aa2a848bce295a
 RUN dnf install -y --setopt=install_weak_deps=False systemd openssh-server iproute procps-ng openssl \
   && dnf clean all
 COPY --chmod=755 default-route.sh /usr/local/sbin/default-route

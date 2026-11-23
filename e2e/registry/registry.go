@@ -28,8 +28,8 @@ func Client(plainHTTP ...string) *regclient.RegClient {
 // Fill copies every image the versions file pins into the registry at host,
 // under the same repository path without the source's host, so that a node
 // with that registry as the mirror of the source's host finds each by its
-// digest. It copies the whole image index, every platform, so the digest
-// stays the same.
+// digest. The versions file pins the linux/amd64 image, not the index, so
+// only that image is copied.
 func Fill(ctx context.Context, rc *regclient.RegClient, m *versions.Manifest, host string) error {
 	for _, image := range m.Pinned() {
 		repo, digest, _ := strings.Cut(image, "@")

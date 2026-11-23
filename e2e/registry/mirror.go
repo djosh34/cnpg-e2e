@@ -12,6 +12,8 @@ import (
 
 	"github.com/djosh34/cnpg-e2e/e2e/versions"
 	"github.com/regclient/regclient"
+	"github.com/regclient/regclient/types/manifest"
+	"github.com/regclient/regclient/types/platform"
 	"github.com/regclient/regclient/types/ref"
 )
 
@@ -130,14 +132,16 @@ func numbers(version string) ([]int, error) {
 	return nums, nil
 }
 
-// mirror copies the image or chart src, by tag, to dst, by the same tag, and
-// returns its digest.
+// mirror copies the image or chart src, by tag, to dst, by the same tag:
+// an image's whole index, with its signatures and attestations. It returns
+// the digest of the linux/amd64 image, which the nodes run, or of the
+// chart.
 func mirror(ctx context.Context, rc *regclient.RegClient, src, dst string) (string, error) {
 	r, err := ref.New(src)
 	if err != nil {
 		return "", err
 	}
-	m, err := rc.ManifestHead(ctx, r, regclient.WithManifestRequireDigest())
+	m, err := rc.ManifestGet(ctx, r)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", src, err)
 	}
@@ -145,5 +149,12 @@ func mirror(ctx context.Context, rc *regclient.RegClient, src, dst string) (stri
 	// By digest, so the copy is the one the file gets, even when the tag
 	// moves meanwhile.
 	err = copyImage(ctx, rc, src+"@"+digest, dst, regclient.ImageWithReferrers(), regclient.ImageWithDigestTags())
-	return digest, err
+	if err != nil || !m.IsList() {
+		return digest, err
+	}
+	amd64, err := manifest.GetPlatformDesc(m, &platform.Platform{OS: "linux", Architecture: "amd64"})
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", src, err)
+	}
+	return amd64.Digest.String(), nil
 }

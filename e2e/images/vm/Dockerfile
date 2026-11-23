@@ -3,7 +3,7 @@
 # The run starts the container privileged, for /dev/kvm and its network,
 # with the VM's cloud-init seed in /seed, a volume at /disk and the VM's MAC
 # address in MAC; vm.sh starts the VM.
-FROM debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
+FROM debian:trixie-20261104-slim@sha256:7378260c0a098d27ac206225db5e7d92b8c7c84ea7afccc86eeb513756bbd392
 RUN apt-get update \
   && apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils genisoimage iproute2 \
   && rm -rf /var/lib/apt/lists/*
