@@ -1,0 +1,5 @@
+apiVersion: v2
+name: registry
+description: The registry of every node, CNCF Distribution v3, read-only on the S3 bucket that the fill writes to.
+type: application
+version: 0.1.0

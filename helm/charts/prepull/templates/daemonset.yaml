@@ -1,0 +1,43 @@
+{{- $images := include "prepull.images" .Values.versions | fromYamlArray | uniq | sortAlpha }}
+# A pause container with every image as a volume on every node: the pod is
+# Ready on a node once the node has pulled all of them, and the kubelet
+# keeps an image that a running pod mounts. A new list starts the new pod
+# on a node before the old one goes, so the node keeps the old images until
+# it has the new ones.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: prepull
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prepull
+  updateStrategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prepull
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: pause
+          image: {{ required "image is required" .Values.image }}
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            {{- range $i, $image := $images }}
+            - name: image-{{ $i }}
+              mountPath: /images/{{ $i }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- range $i, $image := $images }}
+        - name: image-{{ $i }}
+          image:
+            reference: {{ $image }}
+            pullPolicy: IfNotPresent
+        {{- end }}

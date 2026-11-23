@@ -1,0 +1,5 @@
+apiVersion: v2
+name: prepull
+description: Puts every image of the versions file on every node, before the releases that run them roll out.
+type: application
+version: 0.1.0

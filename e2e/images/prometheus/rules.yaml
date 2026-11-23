@@ -1,8 +1,7 @@
 # Alert rules for the CNPG cluster, in Prometheus rule-file format.
 # Prometheus or the Mimir ruler evaluates them; Alertmanager only routes the
-# alerts (alertmanager.yaml). The collectors' values in
-# helm/charts/cnpg-opentelemetry-collector set the scrape targets and the
-# labels the rules expect.
+# alerts (alertmanager.yaml). The collectors' values, helm/values/otel*.yaml,
+# set the scrape targets and the labels the rules expect.
 #
 # The dashboard's Healthy tile counts the firing critical alerts, and a tile
 # is red only while the critical alert it shows fires.

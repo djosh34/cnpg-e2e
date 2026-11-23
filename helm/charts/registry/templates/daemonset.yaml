@@ -1,0 +1,55 @@
+# One registry on every node, on port 5000 of the node's address, where
+# registries.yaml sends the node's pulls from ghcr.io. A node runs one at a
+# time, since both would take the port: an update replaces them node by
+# node, after the prepull put the new image on every node.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: registry
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: registry
+  updateStrategy:
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: registry
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: registry
+          image: {{ required "image is required" .Values.image }}
+          imagePullPolicy: IfNotPresent
+          {{- if .Values.ca }}
+          env:
+            - name: SSL_CERT_FILE
+              value: /etc/distribution/ca.crt
+          {{- end }}
+          ports:
+            - name: registry
+              containerPort: 5000
+              hostPort: 5000
+          readinessProbe:
+            httpGet:
+              path: /v2/
+              port: registry
+          volumeMounts:
+            - name: config
+              mountPath: /etc/distribution
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: registry
+            items:
+              - {key: config.yml, path: config.yml}
+              {{- if .Values.ca }}
+              - {key: ca.crt, path: ca.crt}
+              {{- end }}

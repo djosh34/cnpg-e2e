@@ -1,0 +1,59 @@
+# What the releases otel-agent and otel-cluster share, both of the
+# opentelemetry-collector chart, in the namespace otel, which the cluster
+# chart admits to the metrics port 9187.
+#
+# Two collectors, both sending OTLP over gRPC with mTLS to one upstream URL
+# outside the cluster, which hands the metrics to the rule evaluator:
+#   - otel-agent, a DaemonSet: one collector per node, scraping what runs on
+#     its node: the CNPG exporters every 5 s, the kubelet (with the volume
+#     usage and k3s's certificate expiry) and its cAdvisor.
+#   - otel-cluster, a Deployment: cert-manager, with its certificates'
+#     expiry.
+# The scrapes add the labels the rules of e2e/images/prometheus expect and
+# keep every metric name. A collector lost with its node leaves its last
+# samples with the evaluator; rules.yaml counts an instance whose newest
+# sample is 30 s behind the others' as reporting nothing.
+#
+# The upstream URL is the e2e test's, otel.example.test. Replace it with a
+# cluster's own.
+
+# The image is the versions file's agent.image or cluster.image: the
+# collector's Kubernetes distribution, whose program is otelcol-k8s.
+command:
+  name: otelcol-k8s
+service:
+  enabled: false
+# The collector sends; it opens no port but its health check.
+ports:
+  otlp: {enabled: false}
+  otlp-http: {enabled: false}
+  jaeger-compact: {enabled: false}
+  jaeger-thrift: {enabled: false}
+  jaeger-grpc: {enabled: false}
+  zipkin: {enabled: false}
+# The client certificate of the release otel-client, and the company CA.
+extraVolumes:
+  - name: client
+    secret: {secretName: otel-client}
+  - name: company-ca
+    secret: {secretName: company-ca}
+extraVolumeMounts:
+  - {name: client, mountPath: /etc/otel/client, readOnly: true}
+  - {name: company-ca, mountPath: /etc/otel/company-ca, readOnly: true}
+alternateConfig:
+  extensions:
+    health_check:
+      endpoint: ${env:MY_POD_IP}:13133
+  exporters:
+    otlp_grpc:
+      endpoint: otel.example.test:4317
+      tls:
+        ca_file: /etc/otel/company-ca/ca.crt
+        cert_file: /etc/otel/client/tls.crt
+        key_file: /etc/otel/client/tls.key
+  service:
+    extensions: [health_check]
+    pipelines:
+      metrics:
+        receivers: [prometheus]
+        exporters: [otlp_grpc]

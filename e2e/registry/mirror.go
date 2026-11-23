@@ -34,12 +34,8 @@ func Mirror(ctx context.Context, file string) error {
 		return fmt.Errorf("%s: %w", file, err)
 	}
 	pins := m.Images()
-	for key, c := range m.Charts {
-		name := c.Name
-		if name == "" {
-			name = key
-		}
-		pins = append(pins, versions.Pin{Repository: strings.TrimPrefix(c.Repository, "oci://") + "/" + name, Tag: c.Version, Digest: c.Digest})
+	for _, c := range m.Charts {
+		pins = append(pins, versions.Pin{Repository: strings.TrimPrefix(c.Repository, "oci://") + "/" + c.Name, Tag: c.Version, Digest: c.Digest})
 	}
 	// The new digest of each digest in the file. Two images with the same
 	// digest, such as the two collectors', are the same tag of one package.

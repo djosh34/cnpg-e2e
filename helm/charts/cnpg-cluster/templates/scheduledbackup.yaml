@@ -1,0 +1,17 @@
+{{- $c := .Values.cluster }}
+# A base backup to the object store every day, and one at once when the
+# cluster is new, so the backup alert has a backup from the start.
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ $c.namespace }}
+spec:
+  cluster:
+    name: {{ $c.name }}
+  schedule: {{ .Values.backupSchedule | quote }}
+  immediate: true
+  backupOwnerReference: self
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io

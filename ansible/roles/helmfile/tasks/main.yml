@@ -1,0 +1,71 @@
+# Copies helm/ and the versions file of the checkout and the upstream charts
+# to the node, then runs one helmfile apply of every chart, with the
+# registry's order when the registry is not there yet.
+
+- name: Make the directories of helmfile
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ deploy_dir }}/helm/upstream"
+    - "{{ deploy_dir }}/versions"
+
+- name: Copy the charts and their values
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../helm/"
+    dest: "{{ deploy_dir }}/helm/"
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Copy the upstream charts
+  ansible.builtin.copy:
+    src: "{{ downloads }}/charts/"
+    dest: "{{ deploy_dir }}/helm/upstream/"
+    mode: "0644"
+
+- name: Copy the versions file
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../versions/versions.yaml"
+    dest: "{{ deploy_dir }}/versions/versions.yaml"
+    mode: "0644"
+
+# An error of the API fails the task: it never counts as no registry.
+- name: Look for the registry
+  ansible.builtin.command: k3s kubectl --namespace registry get daemonset registry --ignore-not-found --output name
+  register: registry
+  changed_when: false
+
+# no_log keeps the environment out of Ansible's output. helmfile writes the
+# values, secrets included, to files for helm, under TMPDIR: a directory of
+# /run, a tmpfs, that only root can read, and it deletes them after each
+# helm call. Its own output shows no secret: helm-diff hides the content of
+# Secrets.
+- name: Apply every chart
+  ansible.builtin.shell: |
+    set -eu
+    umask 077
+    mkdir -p /run/helmfile
+    TMPDIR=/run/helmfile helmfile --file helmfile.yaml.gotmpl --no-color apply --skip-diff-on-install --suppress-secrets
+  args:
+    chdir: "{{ deploy_dir }}/helm"
+  environment: "{{ dict(helmfile_env | zip(query('ansible.builtin.env', *helmfile_env))) | combine(fixed) }}"
+  vars:
+    fixed:
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      HELMFILE_UPGRADE_NOTICE_DISABLED: "1"
+      REGISTRY_PRESENT: "{{ (registry.stdout | length > 0) | string | lower }}"
+  register: apply
+  no_log: true
+  failed_when: false
+  changed_when: (apply.stdout ~ apply.stderr) is search('(Updated|Reinstalled|Deleted) Releases')
+
+- name: Show what helmfile did
+  ansible.builtin.debug:
+    msg: "{{ (apply.stdout ~ '\n' ~ apply.stderr) | trim | split('\n') }}"
+
+- name: Check that helmfile succeeded
+  ansible.builtin.assert:
+    that: apply.rc == 0
+    fail_msg: helmfile apply exited with {{ apply.rc }}
+    quiet: true

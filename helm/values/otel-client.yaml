@@ -1,0 +1,6 @@
+# The release otel-client: the collectors' client certificate names the
+# nodes, since the company CA issues only those. helmfile.yaml.gotmpl adds
+# the company CA and the EAB key.
+dnsNames: [k3s-1.example.test, k3s-2.example.test, k3s-3.example.test]
+acme:
+  server: https://acme.example.test/v1/pki/acme/directory

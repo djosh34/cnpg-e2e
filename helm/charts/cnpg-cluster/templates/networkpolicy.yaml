@@ -1,10 +1,5 @@
 {{- $c := .Values.cluster }}
 {{- $n := .Values.network }}
-{{- /* Every node's pod range, read from the cluster; a new node needs a helm upgrade. */}}
-{{- $nodes := (lookup "v1" "Node" "" "").items }}
-{{- if not $nodes }}
-{{- fail "no nodes found: render against the cluster (helm upgrade, or helm template --dry-run=server)" }}
-{{- end }}
 # One ingress policy for the instance pods: 5432 from outside the cluster and the
 # other nodes, 5432 and 8000 between the cluster's pods, 8000 from the operator and
 # 9187 from the OTel namespace. NetworkPolicy does not filter the pod's own node.
@@ -51,14 +46,12 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              {{- range $nodes }}
-              - {{ .spec.podCIDR }}
-              {{- end }}
+              - {{ required "network.podCIDR is required" $n.podCIDR }}
         # externalTrafficPolicy Cluster, client entered on another node: its flannel.1
         # address, the network address of its podCIDR.
-        {{- range $nodes }}
+        {{- range $n.tunnelAddresses }}
         - ipBlock:
-            cidr: {{ first (splitList "/" .spec.podCIDR) }}/32
+            cidr: {{ . }}/32
         {{- end }}
         # externalTrafficPolicy Local, client entered on another node through klipper-lb.
         - namespaceSelector:

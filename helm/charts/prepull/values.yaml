@@ -1,0 +1,8 @@
+# The pause image the pod runs, by tag and digest: prepull.image of the
+# versions file.
+image: ""
+
+# The versions file without its k3s and charts. Each image it pins is an
+# image volume: a string with @sha256:, or a block of a chart's values with
+# repository and a digest in digest or after the tag's @.
+versions: {}

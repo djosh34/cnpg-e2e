@@ -10,7 +10,7 @@ import (
 )
 
 // The cluster the chart makes, as helm/values/cluster.yaml names it, and its
-// release in helm/releases.yaml.
+// release in helm/helmfile.yaml.gotmpl.
 const (
 	namespace      = "databases"
 	clusterName    = "pg"
