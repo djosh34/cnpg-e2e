@@ -1,5 +1,10 @@
 {{- $c := .Values.cluster }}
 {{- $n := .Values.network }}
+{{- $podCIDR := required "network.podCIDR is required" $n.podCIDR }}
+{{- if ne (last (splitList "/" $podCIDR)) "16" }}
+{{- fail "network.podCIDR must be a /16, as k3s's default, which gives each node a /24" }}
+{{- end }}
+{{- $octets := splitList "." (first (splitList "/" $podCIDR)) }}
 # One ingress policy for the instance pods: 5432 from outside the cluster and the
 # other nodes, 5432 and 8000 between the cluster's pods, 8000 from the operator and
 # 9187 from the OTel namespace. NetworkPolicy does not filter the pod's own node.
@@ -46,12 +51,13 @@ spec:
         - ipBlock:
             cidr: 0.0.0.0/0
             except:
-              - {{ required "network.podCIDR is required" $n.podCIDR }}
+              - {{ $podCIDR }}
         # externalTrafficPolicy Cluster, client entered on another node: its flannel.1
-        # address, the network address of its podCIDR.
-        {{- range $n.tunnelAddresses }}
+        # address, the network address of its podCIDR. k3s may give a node any /24 of
+        # the pod range, so every one of them.
+        {{- range until 256 }}
         - ipBlock:
-            cidr: {{ . }}/32
+            cidr: {{ index $octets 0 }}.{{ index $octets 1 }}.{{ . }}.0/32
         {{- end }}
         # externalTrafficPolicy Local, client entered on another node through klipper-lb.
         - namespaceSelector:

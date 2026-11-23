@@ -20,12 +20,9 @@ rwLoadBalancer:
 network:
   operatorNamespace: cnpg-system
   otelNamespace: otel
-  # The pod range of the cluster, k3s's default cluster-cidr, and each
-  # node's flannel.1 address: the first address of its own pod range, which
-  # k3s gives the nodes in the order they join. A new node needs its address
-  # here: kubectl get nodes -o custom-columns=NAME:.metadata.name,CIDR:.spec.podCIDR
+  # The pod range of the cluster, k3s's default cluster-cidr: a /16, of
+  # which each node gets a /24.
   podCIDR: 10.42.0.0/16
-  tunnelAddresses: [10.42.0.0, 10.42.1.0, 10.42.2.0]
 
 # CN and dnsNames of the server certificate and of the one replication
 # certificate shared by all instances, both signed by the CA of the chart's

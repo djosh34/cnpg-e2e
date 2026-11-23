@@ -57,6 +57,7 @@ const (
 	// them in the node's own layer, where the overlay mounts of its
 	// snapshots fail, so a volume holds them.
 	containerdDir = "/var/lib/rancher/k3s/agent/containerd"
+	kubeletDir    = "/var/lib/kubelet"
 )
 
 var registryAddr = registryIP + ":5000"
@@ -177,10 +178,12 @@ func startLab(ctx context.Context, t *testing.T, m *versions.Manifest, from *cac
 					h.Privileged = true
 					h.CgroupnsMode = moby.CgroupnsModePrivate
 					h.Tmpfs = map[string]string{"/run": "", "/run/lock": "", "/tmp": ""}
-					// k3s's local-path volumes, such as the instances' data,
-					// on a volume too: the instances run in a user namespace,
-					// whose idmapped mounts the node's own layer may not take.
+					// The kubelet's pod volumes and k3s's local-path volumes,
+					// such as the instances' data, on volumes too: the
+					// instances run in a user namespace, and runc cannot
+					// idmap a mount of the node's own overlay layer.
 					h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeVolume, Target: containerdDir},
+						mount.Mount{Type: mount.TypeVolume, Target: kubeletDir},
 						mount.Mount{Type: mount.TypeVolume, Target: storageDir})
 				}),
 				// systemctl is-active of two units holds when either is.
@@ -281,6 +284,20 @@ func (l *lab) runStore(ctx context.Context, image string, restored bool) error {
 		})
 		if err != nil {
 			return fmt.Errorf("the store answering: %w", err)
+		}
+		// versitygw keeps a bucket's versioning and policy in extended
+		// attributes, which docker commit leaves out.
+		for _, st := range []struct {
+			path, body string
+			status     int
+		}{
+			{"/" + s3Bucket + "?versioning", versioningOn, 200},
+			{"/" + s3Bucket + "?policy", s3Policy, 204},
+			{"/" + registryBucket + "?policy", registryPolicy, 204},
+		} {
+			if err := rootKeys.want(ctx, http.MethodPut, st.path, st.body, st.status); err != nil {
+				return fmt.Errorf("the restored store's settings: %w", err)
+			}
 		}
 		return nil
 	}
