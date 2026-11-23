@@ -6,11 +6,10 @@ downloads: "{{ playbook_dir }}/downloads"
 deploy_dir: /opt/deploy
 
 # The variables of the controller's environment that helmfile reads: the
-# company CA and the charts' secrets. They reach the node only as the
-# environment of helmfile and never land on a disk. Ansible puts them on the
-# command line of the task over SSH, so while helmfile runs, ps shows them
-# to a user of the controller or of the first node; only root logs in to
-# a node.
+# company CA and the charts' secrets. They never land on a disk: Ansible
+# puts them on the command line of the task over SSH, which sets them as
+# helmfile's environment. So while helmfile runs, ps shows them to a user of
+# the controller or of the first node; only root logs in to a node.
 helmfile_env:
   - COMPANY_CA
   - REGISTRY_HTTP_SECRET

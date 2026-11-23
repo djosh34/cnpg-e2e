@@ -80,7 +80,8 @@
   changed_when: false
 
 # no_log keeps the environment and helmfile's output, which shows values,
-# out of Ansible's output. helmfile writes the values, secrets included, to
+# out of Ansible's output, unless Ansible runs with -vvv, which prints the
+# environment anyway: never run it so. helmfile writes the values, secrets included, to
 # files for helm, under TMPDIR: a directory of /run, a tmpfs, that only root
 # can read, and it deletes them after each helm call. It exits with 2 when it
 # changed a release.
