@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/djosh34/cnpg-e2e/e2e/versions"
@@ -20,30 +23,20 @@ var sources = map[string]string{
 }
 
 // Mirror copies each image and chart of the versions file at file into
-// this repo's packages, from its source by the tag the file names, with its
-// signatures and attestations. It then writes the digest each tag had at
-// its source into the file, in place of the one there. Each package must be
-// public before a run without a login can pull it.
-func Mirror(ctx context.Context, file string) error {
+// this repo's packages, from its source, with its signatures and
+// attestations, and writes the tag and digest it copied into the file. It
+// copies by the tag the file names, or with latest by the newest tag of the
+// same kind at the source (see newestTag). Each package must be public
+// before a run without a login can pull it.
+func Mirror(ctx context.Context, file string, latest bool) error {
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return err
 	}
-	m, err := versions.Parse(data)
-	if err != nil {
-		return fmt.Errorf("%s: %w", file, err)
-	}
-	pins := m.Images()
-	for _, c := range m.Charts {
-		pins = append(pins, versions.Pin{Repository: strings.TrimPrefix(c.Repository, "oci://") + "/" + c.Name, Tag: c.Version, Digest: c.Digest})
-	}
-	// The new digest of each digest in the file. Two images with the same
-	// digest, such as the two collectors', are the same tag of one package.
-	copied := map[string]string{}
-	for _, p := range pins {
+	data, err = versions.Update(data, func(p versions.Pin) (versions.Pin, error) {
 		name, ok := strings.CutPrefix(p.Repository, versions.Packages+"/")
 		if !ok || p.Tag == "" {
-			return fmt.Errorf("%s is not one of this repo's packages by tag", p)
+			return p, fmt.Errorf("%s is not one of this repo's packages by tag", p)
 		}
 		src := "dhi.io/" + name
 		if s, ok := sources[name]; ok {
@@ -51,26 +44,90 @@ func Mirror(ctx context.Context, file string) error {
 		}
 		// A new client for each package: with one client for all of them,
 		// dhi.io answered unauthorized from the second repository on.
-		digest, err := mirror(ctx, Client(), src+":"+p.Tag, p.Repository+":"+p.Tag)
+		rc := Client()
+		tag := p.Tag
+		if latest {
+			tags, err := tagList(ctx, rc, src)
+			if err != nil {
+				return p, err
+			}
+			if tag, err = newestTag(tags, p.Tag); err != nil {
+				return p, fmt.Errorf("%s: %w", src, err)
+			}
+		}
+		digest, err := mirror(ctx, rc, src+":"+tag, p.Repository+":"+tag)
 		if err != nil {
-			return err
+			return p, err
 		}
-		if d, ok := copied[p.Digest]; ok && d != digest {
-			return fmt.Errorf("%s and another image share the digest %s in the file, but not at their sources", p, p.Digest)
-		}
-		copied[p.Digest] = digest
-		log.Printf("mirror: %s:%s@%s", p.Repository, p.Tag, digest)
-	}
-	pairs := make([]string, 0, 2*len(copied))
-	for old, digest := range copied {
-		pairs = append(pairs, old, digest)
-	}
-	// One pass, so a new digest is never replaced again.
-	data = []byte(strings.NewReplacer(pairs...).Replace(string(data)))
-	if _, err := versions.Parse(data); err != nil {
-		return fmt.Errorf("the new versions file: %w", err)
+		log.Printf("mirror: %s:%s@%s", p.Repository, tag, digest)
+		return versions.Pin{Repository: p.Repository, Tag: tag, Digest: digest}, nil
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", file, err)
 	}
 	return os.WriteFile(file, data, 0o644)
+}
+
+// tagList is every tag of the repository src.
+func tagList(ctx context.Context, rc *regclient.RegClient, src string) ([]string, error) {
+	r, err := ref.New(src)
+	if err != nil {
+		return nil, err
+	}
+	tl, err := rc.TagList(ctx, r)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", src, err)
+	}
+	return tl.GetTags()
+}
+
+// versionTag is a tag that starts with a version: an optional v, numbers
+// with dots, then the rest, such as -debian13.
+var versionTag = regexp.MustCompile(`^(v?)([0-9]+(?:\.[0-9]+)*)(.*)$`)
+
+// newestTag is the newest of tags of the same kind as current: the same
+// first number, as many numbers and the same text around them. For
+// 18.7-debian13 it may be 18.8-debian13, never 19.1-debian13, 18.8 or
+// 18.8-alpine3.24. A new first number can need more than a new image, such
+// as a PostgreSQL major upgrade, so it stays a change by hand. It is
+// current when no tag is newer.
+func newestTag(tags []string, current string) (string, error) {
+	want := versionTag.FindStringSubmatch(current)
+	if want == nil {
+		return "", fmt.Errorf("the tag %s does not start with a version", current)
+	}
+	wantNums, err := numbers(want[2])
+	if err != nil {
+		return "", err
+	}
+	best, bestNums := current, wantNums
+	for _, t := range tags {
+		got := versionTag.FindStringSubmatch(t)
+		if got == nil || got[1] != want[1] || got[3] != want[3] {
+			continue
+		}
+		nums, err := numbers(got[2])
+		if err != nil || len(nums) != len(wantNums) || nums[0] != wantNums[0] {
+			continue
+		}
+		if slices.Compare(nums, bestNums) > 0 {
+			best, bestNums = t, nums
+		}
+	}
+	return best, nil
+}
+
+// numbers are the numbers of a version such as 1.21.3.
+func numbers(version string) ([]int, error) {
+	var nums []int
+	for _, f := range strings.Split(version, ".") {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			return nil, err
+		}
+		nums = append(nums, n)
+	}
+	return nums, nil
 }
 
 // mirror copies the image or chart src, by tag, to dst, by the same tag, and

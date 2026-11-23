@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func TestRepository(t *testing.T) {
@@ -30,8 +32,7 @@ func TestRepository(t *testing.T) {
 const digest = "sha256:0000000000000000000000000000000000000000000000000000000000000001"
 
 func TestImages(t *testing.T) {
-	var w images
-	w.visit(map[string]any{
+	data, err := yaml.Marshal(map[string]any{
 		"postgresql": map[string]any{"imageName": "registry.example/pg:18@" + digest},
 		"chart": map[string]any{
 			"image":   map[string]any{"repository": "quay.io/a/b", "tag": "v1", "digest": digest},
@@ -41,13 +42,22 @@ func TestImages(t *testing.T) {
 			"comment": "not an image",
 		},
 		"charts": map[string]any{"c": map[string]any{"repository": "https://charts.example", "version": "1.0.0"}},
-	}, "")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	var w images
+	w.visit(&doc, "")
 	if want := []string{"chart.byTag"}; !slices.Equal(w.unpinned, want) {
 		t.Errorf("unpinned: got %q, want %q", w.unpinned, want)
 	}
 	var got []string
-	for _, p := range w.pinned {
-		got = append(got, p.String())
+	for _, s := range w.sites {
+		got = append(got, s.pin.String())
 	}
 	slices.Sort(got)
 	want := []string{
@@ -149,5 +159,74 @@ func TestCheck(t *testing.T) {
 		if exactVersion.MatchString(version) != exact {
 			t.Errorf("%s: exact %v", version, !exact)
 		}
+	}
+}
+
+// Update moves each pin of the versions file where move says, in place,
+// and leaves every other line as it is.
+func TestUpdate(t *testing.T) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := Update(data, func(p Pin) (Pin, error) { return p, nil })
+	if err != nil || string(same) != string(data) {
+		t.Fatalf("Update with no move changed the file: %v", err)
+	}
+	newDigest := func(n string) string { return "sha256:" + strings.Repeat(n, 64) }
+	moves := map[string]Pin{
+		"cert-manager-chart":      {Tag: "1.22.0", Digest: newDigest("a")},
+		"cert-manager-controller": {Tag: "1.22.0", Digest: newDigest("b")},
+		"postgres":                {Tag: "18.8-debian13", Digest: newDigest("c")},
+		"cloudnative-pg":          {Tag: "1.30.3", Digest: newDigest("d")},
+		"opentelemetry-collector": {Tag: "0.166.0-contrib", Digest: newDigest("e")},
+	}
+	calls := map[Pin]int{}
+	out, err := Update(data, func(p Pin) (Pin, error) {
+		calls[p]++
+		if to, ok := moves[strings.TrimPrefix(p.Repository, Packages+"/")]; ok {
+			return Pin{Repository: p.Repository, Tag: to.Tag, Digest: to.Digest}, nil
+		}
+		return p, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, n := range calls {
+		if n != 1 {
+			t.Errorf("move of %s: %d calls", p, n)
+		}
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := m.Charts["cert-manager"]; c.Version != "1.22.0" || c.Digest != newDigest("a") {
+		t.Errorf("the cert-manager chart: %+v", c)
+	}
+	for _, want := range []string{
+		Packages + "/cert-manager-controller:1.22.0@" + newDigest("b"),
+		Packages + "/postgres:18.8-debian13@" + newDigest("c"),
+		Packages + "/cloudnative-pg:1.30.3@" + newDigest("d"),
+		Packages + "/opentelemetry-collector:0.166.0-contrib@" + newDigest("e"),
+	} {
+		if !slices.ContainsFunc(m.Images(), func(p Pin) bool { return p.String() == want }) {
+			t.Errorf("no image %s", want)
+		}
+	}
+	// The chart's version and digest, the controller's tag and digest, the
+	// postgres and CNPG strings, and each collector's tag and digest.
+	before, after := strings.Split(string(data), "\n"), strings.Split(string(out), "\n")
+	if len(before) != len(after) {
+		t.Fatalf("%d lines, then %d", len(before), len(after))
+	}
+	changed := 0
+	for i := range before {
+		if before[i] != after[i] {
+			changed++
+		}
+	}
+	if changed != 10 {
+		t.Errorf("%d lines changed, want 10:\n%s", changed, out)
 	}
 }

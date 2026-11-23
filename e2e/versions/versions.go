@@ -117,18 +117,26 @@ func Load(file string) (*Manifest, error) {
 
 // Parse reads a manifest from its content.
 func Parse(data []byte) (*Manifest, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
 	var m Manifest
-	if err := yaml.Unmarshal(data, &m); err != nil {
+	if err := doc.Decode(&m); err != nil {
 		return nil, err
 	}
 	var all any
-	if err := yaml.Unmarshal(data, &all); err != nil {
+	if err := doc.Decode(&all); err != nil {
 		return nil, err
 	}
 	var w images
-	w.visit(all, "")
-	slices.SortFunc(w.pinned, func(a, b Pin) int { return strings.Compare(a.String(), b.String()) })
-	m.images = slices.Compact(w.pinned)
+	w.visit(&doc, "")
+	pinned := make([]Pin, 0, len(w.sites))
+	for _, s := range w.sites {
+		pinned = append(pinned, s.pin)
+	}
+	slices.SortFunc(pinned, func(a, b Pin) int { return strings.Compare(a.String(), b.String()) })
+	m.images = slices.Compact(pinned)
 	slices.Sort(w.unpinned)
 	errs := []error{m.check()}
 	for _, path := range w.unpinned {
@@ -246,58 +254,199 @@ func (c chartImage) pinnedIn(manifest any) bool {
 	return strings.HasPrefix(value, "sha256:")
 }
 
-// images walks the manifest for its images: those it pins, the paths of
-// the image blocks without a digest, and of those with a digest both in
+// images walks the manifest for its images: where it pins each, the paths
+// of the image blocks without a digest, and of those with a digest both in
 // digest and in tag, of which a chart reads only one. charts holds chart
 // repositories, not images, and k3s its airgap images by tag, which k3s
 // imports.
 type images struct {
-	pinned               []Pin
+	sites                []site
 	unpinned, twoDigests []string
 }
 
-func (w *images) visit(node any, path string) {
-	switch n := node.(type) {
-	case string:
-		if name, digest, ok := strings.Cut(n, "@"); ok && strings.HasPrefix(digest, "sha256:") {
-			w.pinned = append(w.pinned, Pin{Repository: Repository(name), Tag: tag(name), Digest: digest})
+// site is where the manifest pins an image or a chart: the scalars of its
+// tag and of its digest. When one string holds both, both are that scalar,
+// and prefix is what comes before the tag in it, such as the repository and
+// its colon.
+type site struct {
+	pin         Pin
+	tag, digest *yaml.Node
+	prefix      string
+}
+
+func (w *images) visit(n *yaml.Node, path string) {
+	switch n.Kind {
+	case yaml.DocumentNode:
+		for _, c := range n.Content {
+			w.visit(c, path)
 		}
-	case []any:
-		for i, v := range n {
-			w.visit(v, fmt.Sprintf("%s[%d]", path, i))
+	case yaml.ScalarNode:
+		if name, digest, ok := strings.Cut(n.Value, "@"); ok && strings.HasPrefix(digest, "sha256:") {
+			t := tag(name)
+			w.sites = append(w.sites, site{
+				pin: Pin{Repository: Repository(name), Tag: t, Digest: digest},
+				tag: n, digest: n, prefix: strings.TrimSuffix(name, t),
+			})
 		}
-	case map[string]any:
-		if repo, ok := n["repository"].(string); ok && repo != "" {
-			if registry, ok := n["registry"].(string); ok && registry != "" {
+	case yaml.SequenceNode:
+		for i, c := range n.Content {
+			w.visit(c, fmt.Sprintf("%s[%d]", path, i))
+		}
+	case yaml.MappingNode:
+		fields := map[string]*yaml.Node{}
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			fields[n.Content[i].Value] = n.Content[i+1]
+		}
+		if repo := scalar(fields["repository"]); repo != "" {
+			if registry := scalar(fields["registry"]); registry != "" {
 				repo = registry + "/" + repo
 			}
-			var digest, tag, inTag string
-			if d, ok := n["digest"].(string); ok {
-				digest = d
-			}
-			if t, ok := n["tag"].(string); ok {
-				tag, inTag, _ = strings.Cut(t, "@")
-			}
+			digestNode, tagNode := fields["digest"], fields["tag"]
+			digest := scalar(digestNode)
+			tag, inTag, _ := strings.Cut(scalar(tagNode), "@")
 			switch {
 			case digest != "" && inTag != "":
 				w.twoDigests = append(w.twoDigests, path)
 			case digest == "":
-				digest = inTag
+				digest, digestNode = inTag, tagNode
 			}
 			if strings.HasPrefix(digest, "sha256:") {
-				w.pinned = append(w.pinned, Pin{Repository: Repository(repo), Tag: tag, Digest: digest})
+				w.sites = append(w.sites, site{pin: Pin{Repository: Repository(repo), Tag: tag, Digest: digest}, tag: tagNode, digest: digestNode})
 			} else {
 				w.unpinned = append(w.unpinned, path)
 			}
 		}
-		for k, v := range n {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k := n.Content[i].Value
 			// A tag with a digest belongs to the block above.
 			if k == "tag" || (path == "" && (k == "charts" || k == "k3s")) {
 				continue
 			}
-			w.visit(v, strings.TrimPrefix(path+"."+k, "."))
+			w.visit(n.Content[i+1], strings.TrimPrefix(path+"."+k, "."))
 		}
 	}
+}
+
+// scalar is the value of a scalar node, or "" for anything else.
+func scalar(n *yaml.Node) string {
+	if n == nil || n.Kind != yaml.ScalarNode {
+		return ""
+	}
+	return n.Value
+}
+
+// chartSites are where the manifest pins its charts: the version and digest
+// of each, as a Pin of its OCI repository and name.
+func chartSites(doc *yaml.Node) []site {
+	var sites []site
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 {
+		return nil
+	}
+	root := doc.Content[0]
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "charts" {
+			continue
+		}
+		charts := root.Content[i+1]
+		for j := 1; j < len(charts.Content); j += 2 {
+			fields := map[string]*yaml.Node{}
+			c := charts.Content[j]
+			for k := 0; k+1 < len(c.Content); k += 2 {
+				fields[c.Content[k].Value] = c.Content[k+1]
+			}
+			repo := strings.TrimPrefix(scalar(fields["repository"]), "oci://") + "/" + scalar(fields["name"])
+			sites = append(sites, site{
+				pin: Pin{Repository: repo, Tag: scalar(fields["version"]), Digest: scalar(fields["digest"])},
+				tag: fields["version"], digest: fields["digest"],
+			})
+		}
+	}
+	return sites
+}
+
+// Update is the versions file data with each image and chart it pins moved
+// to the tag and digest that move gives for it, with the file's comments
+// and layout kept. It calls move once for each pin.
+func Update(data []byte, move func(Pin) (Pin, error)) ([]byte, error) {
+	if _, err := Parse(data); err != nil {
+		return nil, err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	var w images
+	w.visit(&doc, "")
+	moved := map[Pin]Pin{}
+	var edits []edit
+	for _, s := range append(w.sites, chartSites(&doc)...) {
+		to, ok := moved[s.pin]
+		if !ok {
+			var err error
+			if to, err = move(s.pin); err != nil {
+				return nil, err
+			}
+			moved[s.pin] = to
+		}
+		switch {
+		case to == s.pin:
+		case s.tag == s.digest:
+			edits = append(edits, edit{s.tag, s.prefix + to.Tag + "@" + to.Digest})
+		case to.Tag != s.pin.Tag && s.tag == nil:
+			return nil, fmt.Errorf("%s has no tag to move to %s", s.pin, to.Tag)
+		default:
+			edits = append(edits, edit{s.digest, to.Digest})
+			if to.Tag != s.pin.Tag {
+				edits = append(edits, edit{s.tag, to.Tag})
+			}
+		}
+	}
+	out, err := apply(data, edits)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := Parse(out); err != nil {
+		return nil, fmt.Errorf("the new versions file: %w", err)
+	}
+	return out, nil
+}
+
+// edit sets the scalar at its node's place in the file to value.
+type edit struct {
+	at    *yaml.Node
+	value string
+}
+
+// apply makes the edits in data, each in place of its scalar's text, in its
+// quotes.
+func apply(data []byte, edits []edit) ([]byte, error) {
+	// From the end, so an edit leaves the places of the others as they are.
+	slices.SortFunc(edits, func(a, b edit) int {
+		if a.at.Line != b.at.Line {
+			return b.at.Line - a.at.Line
+		}
+		return b.at.Column - a.at.Column
+	})
+	lines := strings.SplitAfter(string(data), "\n")
+	for _, e := range edits {
+		quote := ""
+		switch e.at.Style {
+		case 0:
+		case yaml.DoubleQuotedStyle:
+			quote = `"`
+		case yaml.SingleQuotedStyle:
+			quote = "'"
+		default:
+			return nil, fmt.Errorf("line %d: the scalar %q is not plain or quoted", e.at.Line, e.at.Value)
+		}
+		line, col := e.at.Line-1, e.at.Column-1
+		old := quote + e.at.Value + quote
+		if line >= len(lines) || col > len(lines[line]) || !strings.HasPrefix(lines[line][col:], old) {
+			return nil, fmt.Errorf("line %d: no %s at column %d", e.at.Line, old, e.at.Column)
+		}
+		lines[line] = lines[line][:col] + quote + e.value + quote + lines[line][col+len(old):]
+	}
+	return []byte(strings.Join(lines, "")), nil
 }
 
 // Repository is the full form of an image name, with its tag cut off:

@@ -3,7 +3,9 @@
 # cluster run are this repo's packages under ghcr.io/djosh34/cnpg-e2e:
 # copies of Docker Hardened Images (DHI), and of the upstream barman-cloud
 # chart, which DHI does not have, each pinned by digest. e2e/cmd/mirror
-# copies them by the tags named here and writes the digests it copied.
+# copies them by the tags named here and writes the digests it copied. The
+# nightly runs it with -latest, which also moves each tag to the newest one
+# of its kind, and releases the file it writes.
 
 # The k3s release of the nodes. The playbooks of ansible/ copy its binary,
 # its install script and the airgap tarball to every node, and k3s imports
