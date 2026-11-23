@@ -93,31 +93,48 @@ func Run(ctx context.Context, data []byte, host string, plainHTTP bool) error {
 }
 
 // Download fetches d into file and checks its sha256, unless file has it
-// already.
+// already. A GET that gets no answer or a server error is tried up to five
+// times in ten minutes: hosts such as raw.githubusercontent.com answer 503
+// now and then.
 func Download(ctx context.Context, d versions.Download, file string) error {
 	if data, err := os.ReadFile(file); err == nil && sum(data) == d.SHA256 {
 		return nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.URL, nil)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	data, status, err := get(ctx, d.URL)
+	for try := 1; err != nil && status/100 != 4 && try < 5; try++ {
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		case <-time.After(time.Duration(try) * 5 * time.Second):
+		}
+		data, status, err = get(ctx, d.URL)
+	}
 	if err != nil {
 		return err
-	}
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err := errors.Join(err, resp.Body.Close()); err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", d.URL, resp.Status)
 	}
 	if got := sum(data); got != d.SHA256 {
 		return fmt.Errorf("%s has the sha256 %s, not %s", d.URL, got, d.SHA256)
 	}
 	return os.WriteFile(file, data, 0o644)
+}
+
+// get returns the body of url, or the status of an answer other than 200.
+func get(ctx context.Context, url string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, resp.StatusCode, errors.Join(fmt.Errorf("GET %s: %s", url, resp.Status), resp.Body.Close())
+	}
+	data, err := io.ReadAll(resp.Body)
+	return data, 0, errors.Join(err, resp.Body.Close())
 }
 
 func sum(data []byte) string {
