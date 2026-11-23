@@ -295,8 +295,9 @@ ethernets:
 				h.Privileged = true
 				h.Mounts = append(h.Mounts, mount.Mount{Type: mount.TypeVolume, Target: "/disk"})
 			}),
-			// WithWaitStrategy would give up after 1 min.
-			testcontainers.WithWaitStrategyAndDeadline(5*time.Minute, wait.ForLog(vmUp)),
+			// Both the strategy and testcontainers' wait for all strategies
+			// give up after 1 min by default.
+			testcontainers.WithWaitStrategyAndDeadline(5*time.Minute, wait.ForLog(vmUp).WithStartupTimeout(5*time.Minute)),
 		},
 	})
 }

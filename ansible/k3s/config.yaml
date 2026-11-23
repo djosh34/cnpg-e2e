@@ -1,7 +1,7 @@
 # The k3s server settings of every node, the file a node reads as
 # /etc/rancher/k3s/config.yaml. The k3s role of the playbooks adds each node's
 # own address, the join to the first node and the DNS server, as does
-# e2e/nodes.go.
+# e2e/nodes.go, and selinux: true on nodes with selinux on.
 
 # Secrets are encrypted before they reach etcd.
 secrets-encryption: true

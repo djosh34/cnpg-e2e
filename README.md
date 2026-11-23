@@ -42,7 +42,7 @@ ansible_user=root
 cd ansible && ansible-playbook -i inventory.ini install.yml
 ```
 
-`dns_server` sets the DNS server of k3s and its pods, where the nodes' own `/etc/resolv.conf` does not do. `selinux=true` is for nodes with SELinux enforcing, such as Rocky Linux 9 machines: before k3s, the role installs `container-selinux` and `k3s-selinux` from the files of the versions file with every repository off, and k3s's config gets `selinux: true`. Set it for the whole group. `--skip-tags helmfile` installs k3s alone.
+`dns_server` sets the DNS server of k3s and its pods, where the nodes' own `/etc/resolv.conf` does not do. `selinux=true` is for nodes with SELinux enforcing, Rocky Linux 9.9 machines: before k3s, the role installs `container-selinux` and `k3s-selinux` from the files of the versions file with every repository off. Rocky Linux 9.9 has every other package they need. k3s's config gets `selinux: true`. Set it for the whole group. `--skip-tags helmfile` installs k3s alone.
 
 ## Deploy the charts
 

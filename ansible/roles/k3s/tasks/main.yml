@@ -82,7 +82,7 @@
 # the first node cluster-init, on every other the first node to join.
 - name: Write config.yaml
   ansible.builtin.copy:
-    content: "{{ shared | combine(own, join, dns, labels) | to_nice_yaml(indent=2) }}"
+    content: "{{ shared | combine(own, join, dns, enforcing) | to_nice_yaml(indent=2) }}"
     dest: /etc/rancher/k3s/config.yaml
     mode: "0600"
   vars:
@@ -95,7 +95,7 @@
          {'server': 'https://' ~ hostvars[first].ansible_default_ipv4.address ~ ':6443',
           'token': k3s_token.content | b64decode | trim} }}
     dns: "{{ {'resolv-conf': '/etc/rancher/k3s/resolv.conf'} if dns_server else {} }}"
-    labels: "{{ {'selinux': true} if selinux | bool else {} }}"
+    enforcing: "{{ {'selinux': true} if selinux | bool else {} }}"
   register: k3s_config
   no_log: true
 

@@ -75,10 +75,11 @@ func testInstall(ctx context.Context, t *testing.T, m *versions.Manifest, vms bo
 }
 
 // selinuxState prints the SELinux mode of a node and the SELinux label of
-// its k3s, each on a line, then the SELinux denials in its audit log.
+// its k3s, each on a line, then the SELinux denials in its audit log. grep
+// exits with 1 when there is none, and with 2 when it cannot read the log.
 const selinuxState = `getenforce
 ps -o label= -p "$(systemctl show --property MainPID --value k3s)"
-grep 'avc: *denied' /var/log/audit/audit.log || true`
+grep 'avc: *denied' /var/log/audit/audit.log || [ $? -eq 1 ]`
 
 // enforcing checks that SELinux is enforcing on every node and that k3s
 // runs in container_runtime_t, the domain the k3s-selinux policy gives it,
