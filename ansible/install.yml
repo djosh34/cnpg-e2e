@@ -1,6 +1,6 @@
 # Installs or upgrades k3s on the nodes, one at a time, then applies every
 # chart with helmfile from the first node. A second run changes nothing. It
-# copies only what cmd/fill put into files/.
+# copies what cmd/fill put into files/, and k3s/ of this directory.
 #
 #   ansible-playbook install.yml
 #

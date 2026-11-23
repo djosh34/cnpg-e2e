@@ -31,17 +31,7 @@ jobs:
           tar -xzf "golangci-lint-$v-linux-amd64.tar.gz"
           mv "golangci-lint-$v-linux-amd64/golangci-lint" golangci-lint
       - name: No nolint
-        run: |
-          set -euo pipefail
-          status=0
-          grep -rin --include='*.go' nolint . || status=$?
-          if ((status == 0)); then
-            echo "lint: nolint comments are not allowed" >&2
-            exit 1
-          fi
-          if ((status != 1)); then
-            exit "$status"
-          fi
+        run: if grep -rn --include='*.go' nolint .; then exit 1; fi
       - name: golangci-lint
         run: |
           set -euo pipefail
