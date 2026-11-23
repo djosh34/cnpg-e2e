@@ -5,10 +5,10 @@ name: e2e
 # always.feature, and those on the runner's own Docker. scenarios picks some
 # by their tags; empty runs every scenario that runs on the runner's own
 # Docker, since those of e2e/features get no charts until they start from
-# the cache too. airgap checks the nodes, the
-# controller and the fill, install installs k3s and every chart of helm/ on
-# empty nodes with ansible/install.yml, and restore starts a clean k3s
-# cluster from the cache and deploys the charts with ansible/upgrade.yml. Each job uploads the
+# the cache too. airgap checks the nodes, the controller and the fill,
+# install installs k3s and every chart of helm/ on empty nodes with
+# ansible/install.yml, and restore starts a clean k3s cluster from the cache
+# and deploys the charts with ansible/upgrade.yml. Each job uploads the
 # run's files, also when its scenario failed. First, the images job
 # publishes the images of e2e/images that the packages do not have yet. When
 # restore runs, the cache job builds and publishes the cache when the

@@ -204,8 +204,8 @@ func testCache(ctx context.Context, t *testing.T, m *versions.Manifest) {
 
 // buildCache starts the lab with empty nodes, runs install.yml without its
 // helmfile step, waits until every node is Ready, runs it again to check
-// that it changes nothing, and saves the lab as the cache. Its containers are gone when it
-// returns.
+// that it changes nothing, and saves the lab as the cache. Its containers
+// are gone when it returns.
 func buildCache(ctx context.Context, t *testing.T, m *versions.Manifest, tag string) {
 	built := t.Run("build the cache", func(t *testing.T) {
 		node, err := images.Get(ctx, "node")
