@@ -203,7 +203,10 @@ func startLab(ctx context.Context, m *versions.Manifest, vms bool, from *cached)
 	if err != nil {
 		return nil, err
 	}
-	return l, l.airgapped(ctx)
+	if err := l.airgapped(ctx); err != nil {
+		return nil, err
+	}
+	return l, nil
 }
 
 // close removes the lab's containers and network, and stops the receiver.

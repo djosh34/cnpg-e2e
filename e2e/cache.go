@@ -146,13 +146,13 @@ func withStorage(ctx context.Context, node, image string) (err error) {
 	if err != nil {
 		return err
 	}
-	var out bytes.Buffer
+	var fromOut, toOut bytes.Buffer
 	from := exec.CommandContext(ctx, "docker", "cp", node+":"+storageDir, "-")
 	to := exec.CommandContext(ctx, "docker", "cp", "--archive", "-", layer+":/var/lib/rancher/k3s/")
-	from.Stdout, from.Stderr, to.Stdin, to.Stdout, to.Stderr = w, &out, r, &out, &out
+	from.Stdout, from.Stderr, to.Stdin, to.Stdout, to.Stderr = w, &fromOut, r, &toOut, &toOut
 	err = errors.Join(from.Start(), to.Start(), w.Close(), r.Close())
 	if err = errors.Join(err, from.Wait(), to.Wait()); err != nil {
-		return fmt.Errorf("copying the storage of %s: %w: %s", node, err, out.String())
+		return fmt.Errorf("copying the storage of %s: %w: %s %s", node, err, fromOut.String(), toOut.String())
 	}
 	_, err = command(ctx, "docker", "commit", layer, image)
 	return err

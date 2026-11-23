@@ -14,6 +14,9 @@ import (
 // user's cache, first on PATH.
 func installTools(ctx context.Context, lab versions.Lab) error {
 	dir, err := cacheFile("tools")
+	if err == nil {
+		err = os.MkdirAll(dir, 0o755)
+	}
 	if err != nil {
 		return err
 	}
