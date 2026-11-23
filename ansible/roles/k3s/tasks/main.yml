@@ -37,12 +37,13 @@
     mode: "0644"
 
 # The image of the registry chart, which no registry can serve before it
-# runs.
+# runs. Tagged helmfile, so k3s alone, as in the cache, has no app image.
 - name: Copy the registry's image, which k3s imports
   ansible.builtin.copy:
     src: "{{ downloads }}/registry.tar"
     dest: /var/lib/rancher/k3s/agent/images/
     mode: "0644"
+  tags: [helmfile]
 
 - name: Read the cluster's token from the first node
   ansible.builtin.slurp:

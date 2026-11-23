@@ -53,6 +53,7 @@
     - name: Export the registry's image as an archive
       ansible.builtin.command: regctl image export {{ versions.registry.image }} {{ downloads }}/registry.tar
       changed_when: true
+      tags: [helmfile]
 
     - name: Fetch the upstream charts
       ansible.builtin.shell: >-

@@ -3,7 +3,9 @@ name: e2e
 # Runs scenarios by hand, each in its own job, in parallel: those of
 # e2e/features, each a new three-node k3s cluster, one scenario, then
 # always.feature, and those on the runner's own Docker. scenarios picks some
-# by their tags; empty runs every scenario. airgap checks the nodes, the
+# by their tags; empty runs every scenario that runs on the runner's own
+# Docker, since those of e2e/features get no charts until they start from
+# the cache too. airgap checks the nodes, the
 # controller and the fill, install installs k3s and every chart of helm/ on
 # empty nodes with ansible/install.yml, and restore starts a clean k3s
 # cluster from the cache and deploys the charts with ansible/upgrade.yml. Each job uploads the
@@ -15,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       scenarios:
-        description: Scenario tags, separated by commas; empty for every scenario
+        description: Scenario tags, separated by commas; empty for airgap, install and restore
         type: string
         default: ""
 
@@ -43,8 +45,7 @@ jobs:
           if [[ -n $WANTED ]]; then
             picked=$(tr -s ', ' '\n' <<<"$WANTED" | sed '/^$/d' | sort -u)
           else
-            # airgap, install and restore have no feature file.
-            picked=$({ grep -ho '^ *@[a-z0-9-]*' e2e/features/*.feature | tr -d ' @' | grep -vx always && echo airgap && echo install && echo restore; } | sort)
+            picked=$(printf '%s\n' airgap install restore)
           fi
           # restore runs in its own job, after the cache job.
           restore=false

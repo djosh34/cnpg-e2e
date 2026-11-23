@@ -67,11 +67,11 @@
   register: registry
   changed_when: false
 
-# no_log keeps the environment out of Ansible's output. helmfile writes the
-# values, secrets included, to files for helm, under TMPDIR: a directory of
-# /run, a tmpfs, that only root can read, and it deletes them after each
-# helm call. Its own output shows no secret: helm-diff hides the content of
-# Secrets. It exits with 2 when it changed a release.
+# no_log keeps the environment and helmfile's output, which shows values,
+# out of Ansible's output. helmfile writes the values, secrets included, to
+# files for helm, under TMPDIR: a directory of /run, a tmpfs, that only root
+# can read, and it deletes them after each helm call. It exits with 2 when it
+# changed a release.
 - name: Apply every chart
   ansible.builtin.shell: |
     set -eu
@@ -88,15 +88,5 @@
       REGISTRY_PRESENT: "{{ (registry.stdout | length > 0) | string | lower }}"
   register: apply
   no_log: true
-  failed_when: false
+  failed_when: apply.rc not in [0, 2]
   changed_when: apply.rc == 2
-
-- name: Show what helmfile did
-  ansible.builtin.debug:
-    msg: "{{ (apply.stdout ~ '\n' ~ apply.stderr) | trim | split('\n') }}"
-
-- name: Check that helmfile succeeded
-  ansible.builtin.assert:
-    that: apply.rc in [0, 2]
-    fail_msg: helmfile apply exited with {{ apply.rc }}
-    quiet: true
