@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/djosh34/cnpg-e2e/e2e/versions"
 )
@@ -22,6 +22,9 @@ import (
 // container on the lab's network. It writes the run's files to
 // results/<name>/.
 func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name string) {
+	if err := isFeatureTag(name); err != nil {
+		t.Fatal(err)
+	}
 	res, err := newResults(name)
 	if err != nil {
 		t.Fatal(err)
@@ -34,35 +37,17 @@ func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name s
 	if err := res.write("versions.yaml", string(data)); err != nil {
 		t.Fatal(err)
 	}
-	tag, err := cacheTag()
-	if err != nil {
-		t.Fatal(err)
-	}
-	from, err := getCache(ctx, t, m, tag)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := prepareHost(ctx, from.images[nodeName(0)]); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	l, err := startLab(ctx, t, m, from, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := l.ready(ctx, start); err != nil {
-		t.Fatal(err)
-	}
+	l, report, start := startCached(ctx, t, m)
 	if name == diskScenario {
 		if err := l.dataDisks(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	report, env, err := l.deploy(ctx, m, "upgrade.yml")
+	deployed, env, err := l.deploy(ctx, m, "upgrade.yml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := res.write("deploy.txt", report); err != nil {
+	if err := res.write("deploy.txt", report+"\n"+deployed); err != nil {
 		t.Fatal(err)
 	}
 	tools := t.TempDir()
@@ -82,7 +67,7 @@ func testFeature(ctx context.Context, t *testing.T, m *versions.Manifest, name s
 		t.Fatal(err)
 	}
 	w := &world{lab: l, m: m, env: env, mon: mon, built: start}
-	if err := runScenario(w, name, res); err != nil {
+	if err := runScenario(ctx, w, name, res); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -94,9 +79,6 @@ func writeKubeconfig(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(config, "https://127.0.0.1:6443") {
-		return fmt.Errorf("the kubeconfig of %s has no server https://127.0.0.1:6443", nodeName(0))
-	}
 	file := filepath.Join(dir, "kubeconfig")
 	err = os.WriteFile(file, []byte(strings.ReplaceAll(config, "https://127.0.0.1:6443", "https://"+nodeIP(0)+":6443")), 0o600)
 	if err != nil {
@@ -104,4 +86,28 @@ func writeKubeconfig(ctx context.Context, dir string) error {
 	}
 	kubeconfig = file
 	return nil
+}
+
+// A feature tag's line in a feature file.
+var tagLine = regexp.MustCompile(`(?m)^\s*@([a-z0-9-]+)\s*$`)
+
+// isFeatureTag fails when no scenario of the feature files has the tag, so
+// a misspelt name starts no cluster.
+func isFeatureTag(name string) error {
+	files, err := filepath.Glob(filepath.Join(featuresDir, "*.feature"))
+	if err != nil {
+		return err
+	}
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		for _, m := range tagLine.FindAllStringSubmatch(string(data), -1) {
+			if m[1] == name && name != "always" {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%q is neither a scenario of the lab nor a tag of a scenario in %s", name, featuresDir)
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/testcontainers/testcontainers-go"
 )
 
 // The store: versitygw with TLS under its own name, with a certificate of
@@ -161,7 +162,9 @@ func (c s3Client) want(ctx context.Context, method, path, body string, status in
 // address belongs to a container that listens on no port. Paused, it takes
 // connections and never answers. Either way it keeps its files, users and
 // settings. The stand-in runs sleep of image, an image of the lab that has
-// it, on the lab's network. restoreStore removes it.
+// it, on the lab's network. restoreStore removes it, and Ryuk does when the
+// test is killed, as it does the lab's containers: the stand-in has the
+// test's session label.
 const storeGone = "s3-gone"
 
 func stopStore(ctx context.Context, network, image string) error {
@@ -169,7 +172,7 @@ func stopStore(ctx context.Context, network, image string) error {
 		return err
 	}
 	_, err := command(ctx, "docker", "run", "--detach", "--name", storeGone, "--network", network, "--ip", s3IP,
-		"--entrypoint", "sleep", image, "infinity")
+		"--label", "org.testcontainers.sessionId="+testcontainers.SessionID(), "--entrypoint", "sleep", image, "infinity")
 	return err
 }
 

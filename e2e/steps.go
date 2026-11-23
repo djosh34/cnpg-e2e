@@ -640,7 +640,7 @@ func (s *scenario) runAlways() error {
 			})
 		},
 		Options: &godog.Options{
-			Format: format, Output: io.Discard, Strict: true, NoColors: true,
+			Format: format, Output: io.Discard, Strict: true, NoColors: true, DefaultContext: s.ctx,
 			Paths: []string{filepath.Join(featuresDir, "always.feature")},
 		},
 	}

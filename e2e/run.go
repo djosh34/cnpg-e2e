@@ -19,7 +19,7 @@ import (
 // the world, then always.feature, and writes its files to res. It fails
 // when the scenario failed or could not run, and when the run could not
 // keep its files.
-func runScenario(w *world, name string, res *results) error {
+func runScenario(ctx context.Context, w *world, name string, res *results) error {
 	format := "progress,cucumber:" + res.path("cucumber.json") + ",junit:" + res.path("junit.xml")
 	ran := 0
 	var s *scenario
@@ -42,7 +42,7 @@ func runScenario(w *world, name string, res *results) error {
 			s.bind(sc)
 		},
 		Options: &godog.Options{
-			Format: format, Output: io.Discard, Strict: true, NoColors: true,
+			Format: format, Output: io.Discard, Strict: true, NoColors: true, DefaultContext: ctx,
 			Paths: []string{featuresDir},
 			Tags:  "@" + name + " && ~@always",
 		},
@@ -120,8 +120,8 @@ func (s *scenario) tearDown(sn *godog.Scenario, err error) error {
 }
 
 // nodeLogs writes the log of k3s on each node, from its journal, to
-// <node>.log, so a node that never turns Ready can be traced. A node that is
-// down at the end has its error there instead.
+// <node>.log, so a node that never turns Ready can be traced. A log it
+// cannot read has the error there instead, and fails the run's files.
 func nodeLogs(ctx context.Context, res *results) error {
 	var errs []error
 	for i := range nodeCount {
@@ -131,6 +131,7 @@ func nodeLogs(ctx context.Context, res *results) error {
 		cancel()
 		if err != nil {
 			log = err.Error()
+			errs = append(errs, fmt.Errorf("the log of %s: %w", node, err))
 		}
 		errs = append(errs, res.write(node+".log", log+"\n"))
 	}

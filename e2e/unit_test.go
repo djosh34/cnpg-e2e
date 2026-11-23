@@ -321,3 +321,15 @@ func TestAlertLabels(t *testing.T) {
 		t.Errorf("selector: %s", got)
 	}
 }
+
+// Only a scenario's tag of the feature files names a feature scenario.
+func TestIsFeatureTag(t *testing.T) {
+	if err := isFeatureTag("switchover"); err != nil {
+		t.Error(err)
+	}
+	for _, name := range []string{"always", "switchove", "../switchover", "rollout"} {
+		if isFeatureTag(name) == nil {
+			t.Errorf("%q is a feature tag", name)
+		}
+	}
+}
