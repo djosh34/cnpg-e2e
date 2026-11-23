@@ -95,27 +95,32 @@ func (s *scenario) tearDown(sn *godog.Scenario, err error) error {
 		logf("always.feature")
 		err = errors.Join(err, s.runAlways())
 	}
+	// The run's files have their own minute, the one TestScenario keeps
+	// after the scenario's deadline, so a scenario that ran out of time
+	// still leaves them.
+	keep, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), 50*time.Second)
+	defer cancel()
 	var fault error
 	if s.clientRan {
-		fault = s.stopClient(s.ctx)
-		log, logErr := rawClientLog(s.ctx)
+		fault = s.stopClient(keep)
+		log, logErr := rawClientLog(keep)
 		fault = errors.Join(fault, logErr, s.results.write("client.log", log))
 	}
 	table := s.table(sn.Name)
 	say(os.Stdout, "\n%s\n", table)
-	state := dumpState(s.ctx)
+	state := dumpState(keep)
 	if s.w != nil {
-		state += "\n" + s.w.mon.history(s.ctx, s.w.built)
+		state += "\n" + s.w.mon.history(keep, s.w.built)
 	}
 	if err != nil || fault != nil {
 		say(os.Stdout, "\n%s", state)
 	}
-	s.images = append(s.images, imagesAtEnd(s.ctx)...)
+	s.images = append(s.images, imagesAtEnd(keep)...)
 	if len(s.images) > 0 {
 		slices.Sort(s.images)
 		fault = errors.Join(fault, s.results.write("images.txt", strings.Join(slices.Compact(s.images), "\n")+"\n"))
 	}
-	s.fault = errors.Join(fault, s.results.write("timing.md", table), s.results.write("state.txt", state), nodeLogs(s.ctx, s.results))
+	s.fault = errors.Join(fault, s.results.write("timing.md", table), s.results.write("state.txt", state), nodeLogs(keep, s.results))
 	return errors.Join(err, s.fault)
 }
 

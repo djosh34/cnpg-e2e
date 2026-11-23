@@ -11,7 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -163,16 +165,20 @@ func (c s3Client) want(ctx context.Context, method, path, body string, status in
 // connections and never answers. Either way it keeps its files, users and
 // settings. The stand-in runs sleep of image, an image of the lab that has
 // it, on the lab's network. restoreStore removes it, and Ryuk does when the
-// test is killed, as it does the lab's containers: the stand-in has the
-// test's session label.
+// test is killed, as it does the lab's containers: the stand-in has their
+// labels.
 const storeGone = "s3-gone"
 
 func stopStore(ctx context.Context, network, image string) error {
 	if _, err := command(ctx, "docker", "stop", "-t", "0", "s3"); err != nil {
 		return err
 	}
-	_, err := command(ctx, "docker", "run", "--detach", "--name", storeGone, "--network", network, "--ip", s3IP,
-		"--label", "org.testcontainers.sessionId="+testcontainers.SessionID(), "--entrypoint", "sleep", image, "infinity")
+	args := []string{"run", "--detach", "--name", storeGone, "--network", network, "--ip", s3IP}
+	labels := testcontainers.GenericLabels()
+	for _, k := range slices.Sorted(maps.Keys(labels)) {
+		args = append(args, "--label", k+"="+labels[k])
+	}
+	_, err := command(ctx, "docker", append(args, "--entrypoint", "sleep", image, "infinity")...)
 	return err
 }
 
