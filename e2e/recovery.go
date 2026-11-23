@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -192,29 +192,37 @@ func idleAfterSwitch(ctx context.Context, _ *scenario, a args) error {
 	}
 }
 
+// backUp: a backup of the cluster, through the barman-cloud plugin.
 func backUp(ctx context.Context, _ *scenario, _ args) error {
-	return takeBackup(ctx, scenarioBackup)
+	_, err := kubectl(ctx, "cnpg", "backup", clusterName, "-n", namespace, "--backup-name", scenarioBackup,
+		"--method", "plugin", "--plugin-name", "barman-cloud.cloudnative-pg.io")
+	return err
 }
 
 func backupDone(ctx context.Context, _ *scenario, _ args) error {
-	return backupCompleted(ctx, scenarioBackup)
+	out, err := kubectl(ctx, "get", "backup", scenarioBackup, "-n", namespace, "-o", `jsonpath={.status.phase}{"\t"}{.status.error}`)
+	if err != nil {
+		return err
+	}
+	if phase, why, _ := strings.Cut(out, "\t"); phase != "completed" {
+		return fmt.Errorf("the backup is %q %s", phase, why)
+	}
+	return nil
 }
 
-// restore runs upgrade.yml with pg_restore on, which adds the release
-// pg-restore to the helmfile: a new cluster that restores the cluster's
-// backups and WAL from the store. Its issuers get new EAB keys, one for
-// each ACME account. The playbook returns once pg-restore is ready, as
-// helmfile waits for each release.
+// restore runs install.yml with pg_restore on, which adds pg-restore: a
+// new cluster restored from the cluster's backups and WAL in the store,
+// with new EAB keys for its ACME accounts. helmfile waits until it is ready.
 func restore(ctx context.Context, s *scenario, _ args) error {
-	env := maps.Clone(s.w.env)
+	env := maps.Clone(s.lab.env)
 	for _, account := range []string{"PG_RESTORE_SERVER", "PG_RESTORE_REPLICATION"} {
-		key, err := s.w.lab.bao.newEAB(ctx)
+		key, err := s.lab.bao.newEAB(ctx)
 		if err != nil {
 			return err
 		}
 		env[account+"_EAB_KID"], env[account+"_EAB_HMAC"] = key.id, key.key
 	}
-	out, err := s.w.lab.playbook(ctx, env, "upgrade.yml", "--extra-vars", "pg_restore=true")
+	out, err := s.lab.playbook(ctx, env, "install.yml", "--extra-vars", "pg_restore=true")
 	if err != nil {
 		return err
 	}
@@ -260,7 +268,7 @@ func (s *scenario) compliant(ctx context.Context, cluster string) error {
 		return fmt.Errorf("instances of %s: %v", cluster, pods)
 	}
 	selector := fmt.Sprintf(`namespace=%q, cluster=%q`, namespace, cluster)
-	zero, err := s.w.mon.pods(ctx, fmt.Sprintf(`count by (pod) (
+	zero, err := s.lab.mon.pods(ctx, fmt.Sprintf(`count by (pod) (
 		(cnpg_compliance_violations{%s} == 0)
 		and on (pod, rule, check) (time() - timestamp(cnpg_compliance_violations{%s}) < 30)) == 4`, selector, selector))
 	if err != nil {
@@ -285,7 +293,7 @@ func breakStore(how string) func(context.Context, *scenario, args) error {
 		s.store = how
 		var err error
 		if how == "stopped" {
-			err = stopStore(ctx, s.w.lab.network.Name, s.w.lab.images["controller"])
+			err = stopStore(ctx, s.lab.network.Name, "cnpg-e2e-controller")
 		} else {
 			err = pauseStore(ctx)
 		}

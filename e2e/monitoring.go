@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -17,14 +17,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/djosh34/cnpg-e2e/e2e/images"
+	"github.com/testcontainers/testcontainers-go"
 )
 
-// The monitoring outside k3s, as containers next to the nodes, with the
-// files of their images in images/: the upstream OTel service with the one
-// URL the collectors in k3s send to, Prometheus as the rule evaluator,
-// Alertmanager and Grafana with its dashboard. The e2e test itself plays
-// the receiver of images/alertmanager/alertmanager.yaml.
+// The monitoring outside k3s, stock images with the files of monitoring/:
+// the OTel service the collectors in k3s send to, Prometheus as the rule
+// evaluator, Alertmanager, and Grafana with the dashboard. The e2e is the
+// receiver of monitoring/alertmanager.yaml.
 const (
 	otelIP         = "10.77.0.50"
 	prometheusIP   = "10.77.0.51"
@@ -35,42 +34,72 @@ const (
 	prometheusName   = "prometheus.example.test"
 	alertmanagerName = "alertmanager.example.test"
 	grafanaName      = "grafana.example.test"
-	// The host and port of the receiver's URL in alertmanager.yaml: a port
-	// above 1023, which a user other than root may listen on.
-	receiverName = "alerts.example.com"
-	receiverPort = "8443"
+	receiverName     = "alerts.example.com"
+	receiverPort     = "8443"
 
-	// Grafana's data source in images/grafana/datasources.yaml, which the
-	// dashboard's data source variable picks.
+	// Grafana's data source of monitoring/grafana/datasources.yaml.
 	grafanaSource   = "prometheus"
 	grafanaPassword = "example-password"
-	// Grafana's API, as its admin: Go sends the user in the URL as basic auth.
-	grafanaURL = "http://admin:" + grafanaPassword + "@" + grafanaIP + ":3000"
+	grafanaURL      = "http://admin:" + grafanaPassword + "@" + grafanaIP + ":3000"
 )
 
-// newMonitoring is the e2e test's view of the lab's monitoring, with the
-// receiver of Alertmanager's notifications served.
-func newMonitoring(root *ca) (*monitoring, error) {
-	dashboard, err := images.Read("grafana/dashboard.json")
+// runMonitoring starts the monitoring and the receiver, and waits until
+// each answers.
+func (l *lab) runMonitoring(ctx context.Context, images map[string]string) (*monitoring, error) {
+	cert, key, err := l.root.serverCert(otelName)
 	if err != nil {
 		return nil, err
 	}
-	var uid struct {
+	ca := string(l.root.certPEM)
+	containers := []labContainer{
+		{
+			name: "otel", ip: otelIP, image: images["otel"], cmd: []string{"--config=/etc/otel/config.yaml"},
+			files:     map[string]string{"/tls/tls.crt": string(cert), "/tls/tls.key": string(key), "/tls/ca.crt": ca},
+			hostFiles: map[string]string{"/etc/otel/config.yaml": "monitoring/otel.yaml"},
+		},
+		{
+			name: "prometheus", ip: prometheusIP, image: images["prometheus"],
+			cmd: []string{"--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--web.enable-remote-write-receiver"},
+			hostFiles: map[string]string{
+				"/etc/prometheus/prometheus.yml": "monitoring/prometheus.yml", "/etc/prometheus/rules.yaml": "monitoring/rules.yaml",
+			},
+		},
+		{
+			name: "alertmanager", ip: alertmanagerIP, image: images["alertmanager"],
+			cmd:       []string{"--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager", "--cluster.listen-address="},
+			files:     map[string]string{"/etc/ssl/certs/ca-certificates.crt": ca},
+			hostFiles: map[string]string{"/etc/alertmanager/alertmanager.yml": "monitoring/alertmanager.yaml"},
+		},
+		{
+			name: "grafana", ip: grafanaIP, image: images["grafana"],
+			hostFiles: map[string]string{
+				"/etc/grafana/provisioning/datasources/e2e.yaml": "monitoring/grafana/datasources.yaml",
+				"/etc/grafana/provisioning/dashboards/e2e.yaml":  "monitoring/grafana/dashboards.yaml",
+				"/etc/grafana/dashboards/dashboard.json":         "monitoring/grafana/dashboard.json",
+			},
+			opts: []testcontainers.ContainerCustomizer{testcontainers.WithEnv(map[string]string{"GF_SECURITY_ADMIN_PASSWORD": grafanaPassword})},
+		},
+	}
+	for _, c := range containers {
+		if _, err := l.run(ctx, c); err != nil {
+			return nil, err
+		}
+	}
+	data, err := os.ReadFile("monitoring/grafana/dashboard.json")
+	if err != nil {
+		return nil, err
+	}
+	var dashboard struct {
 		UID string `json:"uid"`
 	}
-	if err := json.Unmarshal([]byte(dashboard), &uid); err != nil {
-		return nil, fmt.Errorf("images/grafana/dashboard.json: %w", err)
+	if err := json.Unmarshal(data, &dashboard); err != nil {
+		return nil, fmt.Errorf("monitoring/grafana/dashboard.json: %w", err)
 	}
-	if uid.UID == "" {
-		return nil, errors.New("images/grafana/dashboard.json has no uid")
+	m := &monitoring{http: &http.Client{Timeout: 20 * time.Second}, dashboard: dashboard.UID}
+	if err := m.receive(l.root); err != nil {
+		return nil, err
 	}
-	m := &monitoring{http: &http.Client{Timeout: 20 * time.Second}, dashboard: uid.UID}
-	return m, m.receive(root)
-}
-
-// ready waits up to 2 min for the four monitoring containers to answer.
-func (m *monitoring) ready(ctx context.Context) error {
-	err := poll(ctx, time.Now().Add(2*time.Minute), func(ctx context.Context) error {
+	err = poll(ctx, time.Now().Add(2*time.Minute), func(ctx context.Context) error {
 		return errors.Join(
 			m.get(ctx, "http://"+otelIP+":13133/", nil),
 			m.get(ctx, "http://"+prometheusIP+":9090/-/ready", nil),
@@ -78,17 +107,15 @@ func (m *monitoring) ready(ctx context.Context) error {
 			m.get(ctx, grafanaURL+"/api/health", nil),
 		)
 	})
-	if err != nil {
-		return fmt.Errorf("the monitoring containers: %w", err)
-	}
-	return nil
+	return m, err
 }
 
-// monitoring is the e2e test's view of the monitoring: Prometheus's,
+// monitoring is the e2e's view of the monitoring: Prometheus's,
 // Alertmanager's and Grafana's APIs, and the notifications the receiver got.
 type monitoring struct {
 	http      *http.Client
 	dashboard string // the uid of the dashboard
+	server    *http.Server
 
 	mu            sync.Mutex
 	notifications []notification
@@ -101,9 +128,8 @@ type notification struct {
 	status string // firing or resolved
 }
 
-// receive serves the receiver of alertmanager.yaml,
-// https://alerts.example.com:8443/hook, on the lab network's gateway, the
-// machine's own address there, with a certificate of the company CA.
+// receive serves the receiver of alertmanager.yaml on the lab network's
+// gateway, this machine's address there, with a certificate of the CA.
 func (m *monitoring) receive(root *ca) error {
 	cert, key, err := root.serverCert(receiverName)
 	if err != nil {
@@ -118,15 +144,16 @@ func (m *monitoring) receive(root *ca) error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(m.notified)}
+	m.server = &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(m.notified)}
 	go func() {
-		// It serves until the e2e test ends.
-		if err := server.Serve(listener); err != nil {
+		if err := m.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			say(os.Stderr, "e2e: the receiver: %v\n", err)
 		}
 	}()
 	return nil
 }
+
+func (m *monitoring) close() error { return m.server.Close() }
 
 // notified keeps the alerts of one webhook notification of Alertmanager.
 func (m *monitoring) notified(w http.ResponseWriter, r *http.Request) {

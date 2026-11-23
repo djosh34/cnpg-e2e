@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -14,16 +14,13 @@ import (
 // known only once the cluster runs. In every other scenario the volumes are
 // on a Docker volume (lab.go).
 const (
-	diskScenario = "data-disk-full"
-	diskSize     = 1 << 30
-	storageDir   = "/var/lib/rancher/k3s/storage"
+	diskSize = 1 << 30
 	// The ballast file, next to the local-path volumes.
 	ballastName = "e2e-ballast"
 )
 
-// dataDisks mounts the data filesystem of every node. The storage directory
-// is still empty: the cache has no charts.
-func (l *lab) dataDisks(ctx context.Context) error {
+// dataDisks: "the data disks are mounted", before the charts.
+func dataDisks(ctx context.Context, _ *scenario, _ args) error {
 	for i := range nodeCount {
 		_, err := command(ctx, "docker", "exec", nodeName(i), "mount", "-t", "tmpfs",
 			"-o", fmt.Sprintf("size=%d,mode=0700", diskSize), "e2e-data", storageDir)
@@ -31,7 +28,6 @@ func (l *lab) dataDisks(ctx context.Context) error {
 			return err
 		}
 	}
-	logf("every node has a data filesystem of %s", gib(diskSize))
 	return nil
 }
 

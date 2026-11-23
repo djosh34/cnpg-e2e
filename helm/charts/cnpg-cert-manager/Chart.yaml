@@ -1,0 +1,9 @@
+# The upstream chart cert-manager-chart with this repo's values. cmd/fill copies its
+# version from versions/versions.yaml and builds charts/.
+apiVersion: v2
+name: cnpg-cert-manager
+version: 0.1.0
+dependencies:
+  - name: cert-manager-chart
+    version: "1.21.3"
+    repository: oci://ghcr.io/djosh34/cnpg-e2e

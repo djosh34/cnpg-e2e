@@ -1,4 +1,4 @@
-# What a scenario run copies out.
-results/
-# What download.yml of ansible/ downloads.
-ansible/downloads/
+/files/
+/results/
+/helm/charts/*/charts/
+/helm/charts/*/Chart.lock

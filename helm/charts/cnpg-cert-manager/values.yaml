@@ -1,0 +1,4 @@
+cert-manager-chart:
+  # The CRDs, so one install gives a working cert-manager.
+  crds:
+    enabled: true

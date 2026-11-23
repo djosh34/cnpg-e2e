@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -122,7 +122,7 @@ func notStreaming(ctx context.Context, _ *scenario, a args) error {
 // instance from the last 30 s.
 func metricsArriving(ctx context.Context, s *scenario, a args) error {
 	up := fmt.Sprintf(`cnpg_collector_up{namespace=%q, pod=%q}`, namespace, a.pods[0])
-	pods, err := s.w.mon.pods(ctx, fmt.Sprintf(`%s == 1 and time() - timestamp(%s) < 30`, up, up))
+	pods, err := s.lab.mon.pods(ctx, fmt.Sprintf(`%s == 1 and time() - timestamp(%s) < 30`, up, up))
 	if err != nil {
 		return err
 	}
@@ -198,14 +198,14 @@ func commitDone(_ context.Context, s *scenario, _ args) error {
 // reports minutes on a caught-up replica for up to 5 min after its
 // PostgreSQL restarts.
 func lagPanelHealthy(ctx context.Context, s *scenario, _ args) error {
-	if err := s.w.mon.panelNotRed(ctx, "Replica lag"); err != nil {
+	if err := s.lab.mon.panelNotRed(ctx, "Replica lag"); err != nil {
 		return err
 	}
 	selector := fmt.Sprintf(`namespace=%q, cluster=%q`, namespace, clusterName)
 	window := int(time.Since(s.marks[s.last]).Seconds()) + 1
 	var report []string
 	for _, metric := range []string{"cnpg_replica_lag_seconds", "cnpg_pg_replication_lag"} {
-		values, err := s.w.mon.values(ctx, fmt.Sprintf(`max by (pod) (max_over_time(%s{%s}[%ds]))`, metric, selector, window))
+		values, err := s.lab.mon.values(ctx, fmt.Sprintf(`max by (pod) (max_over_time(%s{%s}[%ds]))`, metric, selector, window))
 		if err != nil {
 			return err
 		}

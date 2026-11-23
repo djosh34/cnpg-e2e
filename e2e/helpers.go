@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"bytes"
@@ -10,11 +10,12 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-// command runs a program with the e2e test's kubeconfig and returns its output
+// command runs a program with the run's kubeconfig and returns its output
 // without the last newline. A failure's error holds its output.
 func command(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -50,14 +51,6 @@ func poll(ctx context.Context, deadline time.Time, check func(context.Context) e
 	}
 }
 
-// statusError is the answer of an HTTP call with a status other than 2xx.
-type statusError struct {
-	code int
-	msg  string
-}
-
-func (e statusError) Error() string { return e.msg }
-
 // callJSON sends req and decodes the JSON answer into out, when out is not
 // nil. An answer other than 2xx, or an empty one where out wants JSON, is an
 // error.
@@ -71,7 +64,7 @@ func callJSON(client *http.Client, req *http.Request, out any) error {
 		return err
 	}
 	if resp.StatusCode/100 != 2 {
-		return statusError{resp.StatusCode, fmt.Sprintf("%s %s: %s: %s", req.Method, req.URL.Redacted(), resp.Status, bytes.TrimSpace(data))}
+		return fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Redacted(), resp.Status, bytes.TrimSpace(data))
 	}
 	if out == nil {
 		return nil
@@ -92,4 +85,20 @@ func say(w io.Writer, format string, args ...any) {
 	if _, err := fmt.Fprintf(w, format, args...); err != nil {
 		os.Exit(2)
 	}
+}
+
+// cacheFile is a file of this user's cache directory for the e2e, which
+// holds the tools, the client and the kubeconfig. One run at a time uses
+// it: the lab's names and addresses are fixed too.
+func cacheFile(name string) (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dir = filepath.Join(dir, "cnpg-e2e")
+	return filepath.Join(dir, name), os.MkdirAll(dir, 0o755)
+}
+
+func writePrivate(file, content string) error {
+	return os.WriteFile(file, []byte(content), 0o600)
 }

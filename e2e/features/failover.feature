@@ -2,23 +2,22 @@ Feature: Failover
   A killed node is a node container stopped with docker stop -t 0, as a
   lost VM.
 
-  Background:
-    Given the cluster is healthy
-
   @primary-node-loss
   Scenario: The primary's node is lost for 2 minutes
+    Given a running cluster
     When the primary's node is killed
-    Then another instance is primary < 600 s
+    Then another instance is primary
     When 120 s pass after the kill
     And the node starts
 
   @replica-node-loss
   Scenario: A replica's node is lost for 6 minutes
+    Given a running cluster
     When replica 1's node is killed
     And 360 s pass
     Then the primary is still primary
     When the node starts
-    Then the cluster is healthy < 600 s
+    Then the cluster is healthy
     And the primary is still primary
     And CNPGReplicaDown fired for replica 1
     And CNPGReplicaDown resolves for replica 1 < 120 s
@@ -31,6 +30,7 @@ Feature: Failover
     replica 2 reports the age of its last replayed transaction as its lag,
     so CNPGReplicaLag can fire for it.
 
+    Given a running cluster
     When the primary's node and replica 1's node are killed
     And 120 s pass after the kill
     Then writing has been down since the kill
@@ -43,12 +43,13 @@ Feature: Failover
     The kubelet starts the killed postgres container again, as after a crash
     or an OOM kill of PostgreSQL.
 
+    Given a running cluster
     When the primary's node is killed
     And 10 s pass
     Then no instance is promoted
     When replica 1's postgres container is killed
-    Then replica 1's postgres container is running < 300 s
-    And another instance is primary < 600 s
+    Then replica 1's postgres container is running
+    And another instance is primary
     When 120 s pass after the kill
     And the node starts
 
@@ -60,12 +61,13 @@ Feature: Failover
     no WAL. The old primary's node is down for over 5 minutes, so
     CNPGReplicaDown fires for it. One write ends the wait.
 
-    Given no writes
+    Given a running cluster
+    And no writes
     When the primary's node is killed
-    Then another instance is primary < 600 s
+    Then another instance is primary
     When the catalog is read on the new primary
     Then CNPGReplicaDown fires for the primary < 420 s after the kill
-    And the new primary is idle after a WAL switch < 900 s
+    And the new primary is idle after a WAL switch
     When the node starts
     And 600 s pass
     And a row is written

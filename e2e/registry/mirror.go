@@ -24,21 +24,20 @@ var sources = map[string]string{
 	"plugin-barman-cloud": "ghcr.io/cloudnative-pg/charts/plugin-barman-cloud",
 }
 
-// Mirror copies each image and chart of the versions file at file into
-// this repo's packages, from its source, with its signatures and
-// attestations, and writes the tag and digest it copied into the file. It
-// copies by the tag the file names, or with latest by the newest tag of the
-// same kind at the source (see newestTag). Each package must be public
-// before a run without a login can pull it.
-func Mirror(ctx context.Context, file string, latest bool) error {
-	data, err := os.ReadFile(file)
+// Mirror copies each image and chart of the versions file into this repo's
+// packages, from its source, with its signatures and attestations, and
+// writes the tags and image digests it copied into the file. It copies by
+// the file's tags, or with latest by the newest tag of the same kind at the
+// source (see newestTag). A new package must be made public once.
+func Mirror(ctx context.Context, latest bool) error {
+	data, err := os.ReadFile(versions.File)
 	if err != nil {
 		return err
 	}
 	data, err = versions.Update(data, func(p versions.Pin) (versions.Pin, error) {
 		name, ok := strings.CutPrefix(p.Repository, versions.Packages+"/")
 		if !ok || p.Tag == "" {
-			return p, fmt.Errorf("%s is not one of this repo's packages by tag", p)
+			return p, fmt.Errorf("%s is not one of this repo's packages by tag", p.Repository)
 		}
 		src := "dhi.io/" + name
 		if s, ok := sources[name]; ok {
@@ -62,12 +61,16 @@ func Mirror(ctx context.Context, file string, latest bool) error {
 			return p, err
 		}
 		log.Printf("mirror: %s:%s@%s", p.Repository, tag, digest)
+		if p.Digest == "" {
+			// A chart, pinned by its version alone.
+			digest = ""
+		}
 		return versions.Pin{Repository: p.Repository, Tag: tag, Digest: digest}, nil
 	})
 	if err != nil {
-		return fmt.Errorf("%s: %w", file, err)
+		return err
 	}
-	return os.WriteFile(file, data, 0o644)
+	return os.WriteFile(versions.File, data, 0o644)
 }
 
 // tagList is every tag of the repository src.

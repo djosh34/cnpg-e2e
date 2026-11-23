@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"bytes"
@@ -22,19 +22,16 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
-// The store: versitygw with TLS under its own name, with a certificate of
-// the company CA. Its bucket is versioned, with a policy that lets CNPG's
-// keys list, read and write, and refuses everyone the deletes and the
-// changes of the bucket's settings.
-// versitygw has no lifecycle rules at all. Its root keys pass every policy,
-// as an account's root does, so only the e2e test has them; CNPG gets its
-// own keys. The admin API, which makes CNPG's user, listens on the
-// container's loopback only.
+// The store: versitygw with TLS, a certificate of the company CA. Its
+// bucket is versioned, with a policy that lets CNPG's keys list, read and
+// write, and refuses everyone deletes and changes of the bucket. Its root
+// keys pass every policy, so only the e2e has them. The admin API, which
+// makes users, listens on the container's loopback.
 const (
 	s3Bucket     = "example-bucket"
 	s3RootAccess = "example-root-access-key"
 	s3RootSecret = "example-root-secret-key"
-	// CNPG's keys, as the Secret backup-creds gives them.
+	// CNPG's keys.
 	s3Access = "example-access-key"
 	s3Secret = "example-secret-key"
 
@@ -42,9 +39,6 @@ const (
 	s3Admin  = "http://127.0.0.1:7070"
 )
 
-// s3Policy is the bucket policy of disk-and-bucket.md: the deny statements
-// of its step 5, and the rights of its step 2 for CNPG's keys, which have no
-// rights of their own in versitygw.
 var s3Policy = `{"Version": "2012-10-17", "Statement": [
   {"Effect": "Allow", "Principal": {"AWS": ["` + s3Access + `"]}, "Action": "s3:ListBucket",
    "Resource": "arn:aws:s3:::` + s3Bucket + `"},
@@ -63,24 +57,29 @@ var s3Policy = `{"Version": "2012-10-17", "Statement": [
 
 const versioningOn = `<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status></VersioningConfiguration>`
 
-// s3Args are the arguments of versitygw.
+// The arguments of versitygw. Its metadata goes to sidecar files, not
+// extended attributes, which docker commit drops.
 var s3Args = []string{"--access", s3RootAccess, "--secret", s3RootSecret, "--port", ":443",
 	"--cert", "/tls/tls.crt", "--key", "/tls/tls.key", "--admin-port", strings.TrimPrefix(s3Admin, "http://"),
-	"--iam-dir", "/iam", "posix", "--versioning-dir", "/versions", "/data"}
+	"--iam-dir", "/s3/iam", "posix", "--versioning-dir", "/s3/versions", "--sidecar", "/s3/meta", "/s3/data"}
+
+// s3User makes a user of the store with the keys.
+func s3User(ctx context.Context, access, secret string) error {
+	_, err := command(ctx, "docker", "exec", "s3", "/usr/local/bin/versitygw", "admin", "--access", s3RootAccess,
+		"--secret", s3RootSecret, "--endpoint-url", s3Admin, "create-user", "--access", access, "--secret", secret, "--role", "user")
+	return err
+}
 
 // setUpStore makes CNPG's user and the bucket, once the store answers, and
 // checks that CNPG's keys can write but not delete or change the bucket.
-func setUpStore(ctx context.Context, root *ca) error {
-	rootKeys, cnpg := newS3(root, s3RootAccess, s3RootSecret), newS3(root, s3Access, s3Secret)
-	err := poll(ctx, time.Now().Add(60*time.Second), func(ctx context.Context) error {
+func setUpStore(ctx context.Context, rootKeys, cnpg s3Client) error {
+	err := poll(ctx, time.Now().Add(time.Minute), func(ctx context.Context) error {
 		return rootKeys.want(ctx, http.MethodGet, "/", "", 200)
 	})
 	if err != nil {
 		return fmt.Errorf("the store answering: %w", err)
 	}
-	_, err = command(ctx, "docker", "exec", "s3", "/usr/local/bin/versitygw", "admin", "--access", s3RootAccess,
-		"--secret", s3RootSecret, "--endpoint-url", s3Admin, "create-user", "--access", s3Access, "--secret", s3Secret, "--role", "user")
-	if err != nil {
+	if err := s3User(ctx, s3Access, s3Secret); err != nil {
 		return err
 	}
 	bucket, check := "/"+s3Bucket, "/"+s3Bucket+"/e2e/limits-check"
@@ -93,7 +92,6 @@ func setUpStore(ctx context.Context, root *ca) error {
 		{rootKeys, http.MethodPut, bucket, "", 200},
 		{rootKeys, http.MethodPut, bucket + "?versioning", versioningOn, 200},
 		{rootKeys, http.MethodPut, bucket + "?policy", s3Policy, 204},
-		// What CNPG's keys can do, and what the policy refuses them.
 		{cnpg, http.MethodPut, check, "check", 200},
 		{cnpg, http.MethodGet, check, "", 200},
 		{cnpg, http.MethodDelete, check, "", 403},
@@ -107,7 +105,6 @@ func setUpStore(ctx context.Context, root *ca) error {
 			return fmt.Errorf("the store's bucket: %w", err)
 		}
 	}
-	logf("the store's bucket is versioned; CNPG's keys can write, but not delete or change the bucket")
 	return nil
 }
 
@@ -118,7 +115,7 @@ type s3Client struct {
 }
 
 // newS3 is a client of the store that trusts the company CA. It reaches the
-// store by its address, which the e2e test's own resolver does not know by
+// store by its address, which this machine's resolver does not know by
 // name.
 func newS3(root *ca, access, secret string) s3Client {
 	pool := x509.NewCertPool()

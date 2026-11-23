@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"bytes"
@@ -7,19 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
-)
-
-// The services outside k3s that the nodes need: DNS, the store and the
-// company CA.
-const (
-	dnsIP  = "10.77.0.2"
-	s3IP   = "10.77.0.20"
-	acmeIP = "10.77.0.30"
-
-	s3Name   = "s3.example.test"
-	acmeName = "acme.example.test"
 )
 
 // The ACME directory of the company CA, and the role its certificates come
@@ -31,21 +19,7 @@ const (
 	acmeTTL  = "2160h"
 )
 
-// hosts is the DNS container's hosts file: every name of the e2e test.
-func hosts() string {
-	lines := []string{
-		s3IP + " " + s3Name, acmeIP + " " + acmeName, clientIP + " " + clientName,
-		otelIP + " " + otelName, prometheusIP + " " + prometheusName,
-		alertmanagerIP + " " + alertmanagerName, grafanaIP + " " + grafanaName,
-		gatewayIP + " " + receiverName,
-	}
-	for i := range nodeCount {
-		lines = append(lines, nodeIP(i)+" "+nodeHost(i))
-	}
-	return strings.Join(lines, "\n") + "\n"
-}
-
-// openbao is the API of the ACME server's OpenBao, for the e2e test.
+// openbao is the API of the ACME server's OpenBao, for the e2e.
 type openbao struct {
 	http  *http.Client
 	token string
@@ -55,7 +29,7 @@ type openbao struct {
 
 // setUpACME sets up the company CA, once its OpenBao answers: OpenBao's PKI
 // with the run's root, serving ACME on 443 with EAB required, http-01
-// checked through the e2e test's DNS, and only the approved names: the
+// checked through the lab's DNS, and only the approved names: the
 // nodes and the client.
 func setUpACME(ctx context.Context, root *ca) (*openbao, error) {
 	// Init can take longer than 10 s, and a second init fails, so it runs

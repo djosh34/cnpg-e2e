@@ -1,0 +1,11 @@
+plugin-barman-cloud:
+  # One plugin per node: CNPG reconciles a cluster, failover included, only
+  # while the plugin answers. They elect a leader.
+  replicaCount: 3
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: plugin-barman-cloud

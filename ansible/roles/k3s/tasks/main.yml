@@ -1,26 +1,29 @@
-# Writes every file k3s reads on a node and copies the binary, the install
-# script, the airgap tarball and the registry's image from the controller.
-# Then it starts k3s, or restarts it when the binary or a file k3s reads at
-# start changed, and waits until the node is an etcd voter. A manifest or
-# an image archive that changed needs no restart: k3s takes it when the file
-# changes. Last, once every node runs, it makes CoreDNS one pod per node.
+# Copies k3s, its config and its images to the node and starts k3s, or
+# restarts it when the binary or a file it reads at start changed.
 
-# With selinux on, the SELinux policies of containers and of k3s go first,
-# from the controller, since the nodes have no internet. Their install
-# labels the k3s directories, so what the tasks below make or copy there
-# gets the policy's labels, and k3s runs in its own domain.
+- name: Read whether SELinux enforces on the node
+  ansible.builtin.slurp:
+    src: /sys/fs/selinux/enforce
+  register: enforce
+  failed_when: false
+
+- name: Check that selinux matches the node
+  ansible.builtin.assert:
+    that: (enforce.content | default('') | b64decode | trim == '1') == (selinux | bool)
+    fail_msg: selinux is {{ selinux }}, but SELinux {{ 'does not enforce' if selinux | bool else 'enforces' }} on the node
+
+# The policies go first, so what the tasks below put into k3s's
+# directories gets their labels. The nodes have no repository; fill checked
+# each rpm's sha256.
 - name: Copy the SELinux policies
   ansible.builtin.copy:
-    src: "{{ downloads }}/{{ item }}.rpm"
+    src: "{{ playbook_dir }}/../files/{{ item }}.rpm"
     dest: /var/cache/k3s-selinux/
     mode: "0644"
   loop: [container-selinux, k3s-selinux]
   when: selinux | bool
 
-# download.yml checked each file against its sha256 in the versions file,
-# which pins it more closely than a signature: the node has no key of
-# k3s-selinux's signer.
-- name: Install the SELinux policies, with every repository off
+- name: Install the SELinux policies
   ansible.builtin.dnf:
     name:
       - /var/cache/k3s-selinux/container-selinux.rpm
@@ -43,32 +46,26 @@
 
 - name: Copy the k3s binary
   ansible.builtin.copy:
-    src: "{{ downloads }}/k3s"
+    src: "{{ playbook_dir }}/../files/k3s"
     dest: /usr/local/bin/k3s
     mode: "0755"
   register: k3s_binary
 
 - name: Copy the install script of k3s
   ansible.builtin.copy:
-    src: "{{ downloads }}/k3s-install.sh"
+    src: "{{ playbook_dir }}/../files/k3s-install.sh"
     dest: /usr/local/bin/k3s-install.sh
     mode: "0755"
   register: k3s_install
 
-- name: Copy the airgap tarball, whose images k3s imports
+# k3s imports both at start: its own images, and the registry's, which no
+# registry can serve before it runs.
+- name: Copy the airgap images and the registry's image
   ansible.builtin.copy:
-    src: "{{ downloads }}/k3s-airgap-images-amd64.tar.zst"
+    src: "{{ playbook_dir }}/../files/{{ item }}"
     dest: /var/lib/rancher/k3s/agent/images/
     mode: "0644"
-
-# The image of the registry chart, which no registry can serve before it
-# runs. Tagged helmfile, so k3s alone, as in the cache, has no app image.
-- name: Copy the registry's image, which k3s imports
-  ansible.builtin.copy:
-    src: "{{ downloads }}/registry.tar"
-    dest: /var/lib/rancher/k3s/agent/images/
-    mode: "0644"
-  tags: [helmfile]
+  loop: [k3s-airgap-images-amd64.tar.zst, registry.tar]
 
 - name: Read the cluster's token from the first node
   ansible.builtin.slurp:
@@ -78,8 +75,7 @@
   no_log: true
   when: inventory_hostname != groups['nodes'][0]
 
-# The settings of k3s/config.yaml, and this node's own: its address, and on
-# the first node cluster-init, on every other the first node to join.
+# k3s/config.yaml, and this node's own settings.
 - name: Write config.yaml
   ansible.builtin.copy:
     content: "{{ shared | combine(own, join, dns, enforcing) | to_nice_yaml(indent=2) }}"
@@ -99,7 +95,7 @@
   register: k3s_config
   no_log: true
 
-- name: Write registries.yaml, which sends every pull from ghcr.io to the cluster's registry on this node
+- name: Write registries.yaml, which sends every pull from ghcr.io to the registry on this node
   ansible.builtin.copy:
     content: |
       mirrors:
@@ -132,7 +128,6 @@
     - /etc/systemd/system/k3s.service.env
   register: k3s_unit
 
-# Without a download, and without starting k3s: the next task does.
 - name: Install the systemd unit of k3s
   ansible.builtin.command: /usr/local/bin/k3s-install.sh
   environment:
@@ -147,9 +142,8 @@
   loop: *unit_files
   register: k3s_unit_now
 
-# systemd's start returns once k3s is ready, and k3s is ready only once its
-# etcd member is a voter, so the next node starts after this one joined.
-- name: Start k3s, or restart it when its binary, unit or a file it reads at start changed, or with k3s_restart
+# k3s is ready only once its etcd member is a voter, so the next node joins after.
+- name: Start k3s, or restart it when it changed
   ansible.builtin.systemd_service:
     name: k3s
     state: "{{ 'restarted' if restart else 'started' }}"
@@ -160,9 +154,8 @@
          or k3s_unit.results | map(attribute='stat.checksum', default='') | list
             != k3s_unit_now.results | map(attribute='stat.checksum', default='') | list }}
 
-# One CoreDNS pod per node, so a lost node takes no name lookups with it.
-# k3s's own manifest of CoreDNS sets no replicas, so the count holds across
-# restarts and upgrades. k3s makes the Deployment a little after it starts.
+# One CoreDNS per node, so a lost node takes no name lookups with it. k3s
+# makes the Deployment a little after it starts and never resets replicas.
 - name: Look at the number of CoreDNS pods
   ansible.builtin.command: k3s kubectl --namespace kube-system get deployment coredns --output jsonpath={.spec.replicas}
   register: coredns

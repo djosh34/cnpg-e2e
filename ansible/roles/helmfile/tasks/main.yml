@@ -1,99 +1,84 @@
-# Copies helm/ and the versions file of the checkout and the upstream charts
-# to the node, then runs one helmfile apply of every chart, with the
-# registry's order when the registry is not there yet.
+# Copies helm, its diff plugin and helmfile to every node, then the charts
+# and the versions file to the first node, where helmfile applies them.
 
-- name: Make the directories of helmfile
+- name: Copy helm and helmfile
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/{{ item }}"
+    dest: /usr/local/bin/
+    mode: "0755"
+  loop: [helm/linux-amd64/helm, helmfile/helmfile]
+
+- name: Make helm's plugin directory
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: /root/.local/share/helm/plugins
     state: directory
     mode: "0755"
-  loop:
-    - "{{ deploy_dir }}/helm/upstream"
-    - "{{ deploy_dir }}/versions"
 
-- name: Read the versions file
-  ansible.builtin.include_vars:
-    file: "{{ playbook_dir }}/../versions/versions.yaml"
-    name: versions
+- name: Copy helm's diff plugin
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/helm-diff/diff"
+    dest: /root/.local/share/helm/plugins/
+    mode: preserve
 
-# So a path gone from the checkout, such as a chart's template, is gone on
-# the node too, and a running cluster gets what a new one gets: helm/ of
-# the checkout and the upstream charts of the versions file, each a file or
-# a directory as there. Before the copy, so a file that became a directory,
-# or the other way round, is out of its way.
-- name: List helm/ on the controller
-  ansible.builtin.find:
-    paths: "{{ playbook_dir }}/../helm"
-    recurse: true
-    hidden: true
-    file_type: any
-  delegate_to: localhost
-  register: checkout
+# helm/ and the versions file, as fill packed them. A new archive replaces
+# the old directory, so nothing removed from helm/ stays on the node.
+- name: Copy the charts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../files/helm.tar"
+    dest: /opt/helm.tar
+    mode: "0644"
+  register: charts
+  run_once: true
 
-- name: List helm/ on the node
-  ansible.builtin.find:
-    paths: "{{ deploy_dir }}/helm"
-    recurse: true
-    hidden: true
-    file_type: any
-  register: node
-
-- name: Remove what the checkout does not have
+- name: Remove the charts of before
   ansible.builtin.file:
-    path: "{{ deploy_dir }}/helm/{{ item }}"
+    path: /opt/deploy
     state: absent
-  loop: "{{ have | difference(want) }}"
+  when: charts is changed
+  run_once: true
+
+- name: Make the directory of the charts
+  ansible.builtin.file:
+    path: /opt/deploy
+    state: directory
+    mode: "0755"
+  run_once: true
+
+- name: Unpack the charts
+  ansible.builtin.unarchive:
+    src: /opt/helm.tar
+    dest: /opt/deploy
+    remote_src: true
+  when: charts is changed
+  run_once: true
+
+- name: Check that every secret is set
+  ansible.builtin.assert:
+    that: missing | length == 0
+    fail_msg: "Not set in the environment: {{ missing | join(', ') }}"
+    quiet: true
   vars:
-    # A directory with a / at its end.
-    have: >-
-      {{ node.files | selectattr('isdir') | map(attribute='path') | map('relpath', deploy_dir ~ '/helm') | map('regex_replace', '$', '/') | list
-         + node.files | rejectattr('isdir') | map(attribute='path') | map('relpath', deploy_dir ~ '/helm') | list }}
-    want: >-
-      {{ checkout.files | selectattr('isdir') | map(attribute='path') | map('relpath', playbook_dir ~ '/../helm') | map('regex_replace', '$', '/') | list
-         + checkout.files | rejectattr('isdir') | map(attribute='path') | map('relpath', playbook_dir ~ '/../helm') | list
-         + ['upstream/'] + versions.charts.keys() | map('regex_replace', '^', 'upstream/') | map('regex_replace', '$', '.tgz') | list }}
+    missing: "{{ secrets | zip(query('ansible.builtin.env', *secrets)) | selectattr('1', 'equalto', '') | map(attribute='0') | list }}"
+  run_once: true
 
-- name: Copy the charts and their values
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../helm/"
-    dest: "{{ deploy_dir }}/helm/"
-    mode: "0644"
-    directory_mode: "0755"
-
-- name: Copy the upstream charts
-  ansible.builtin.copy:
-    src: "{{ downloads }}/charts/{{ item }}.tgz"
-    dest: "{{ deploy_dir }}/helm/upstream/{{ item }}.tgz"
-    mode: "0644"
-  loop: "{{ versions.charts.keys() | list }}"
-
-- name: Copy the versions file
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../versions/versions.yaml"
-    dest: "{{ deploy_dir }}/versions/versions.yaml"
-    mode: "0644"
-
-# An error of the API fails the task: it never counts as no registry.
 - name: Look for the registry
   ansible.builtin.command: k3s kubectl --namespace registry get daemonset registry --ignore-not-found --output name
   register: registry
   changed_when: false
+  run_once: true
 
-# no_log keeps the environment and helmfile's output, which shows values,
-# out of Ansible's output, unless Ansible runs with -vvv, which prints the
-# environment anyway: never run it so. helmfile writes the values, secrets included, to
-# files for helm, under TMPDIR: a directory of /run, a tmpfs, that only root
-# can read, and it deletes them after each helm call. It exits with 2 when it
-# changed a release.
+# no_log keeps the secrets out of the output, unless Ansible runs with -vvv:
+# never run it so. helmfile writes the values for helm under TMPDIR, on a
+# tmpfs only root reads. It exits with 2 when it changed a release.
 - name: Apply every chart
   ansible.builtin.shell: |
     set -eu
     umask 077
     mkdir -p /run/helmfile
-    TMPDIR=/run/helmfile helmfile --file helmfile.yaml.gotmpl --no-color apply --skip-diff-on-install --suppress-secrets --detailed-exitcode
+    TMPDIR=/run/helmfile helmfile --file helmfile.yaml.gotmpl --no-color apply --skip-deps --skip-diff-on-install --suppress-secrets --detailed-exitcode
   args:
-    chdir: "{{ deploy_dir }}/helm"
-  environment: "{{ dict(helmfile_env | zip(query('ansible.builtin.env', *helmfile_env))) | combine(fixed) }}"
+    chdir: /opt/deploy/helm
+  environment: "{{ dict(secrets | zip(query('ansible.builtin.env', *secrets))) | combine(fixed) }}"
   vars:
     fixed:
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -104,3 +89,4 @@
   no_log: true
   failed_when: apply.rc not in [0, 2]
   changed_when: apply.rc == 2
+  run_once: true

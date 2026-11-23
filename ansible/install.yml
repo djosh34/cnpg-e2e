@@ -1,25 +1,16 @@
-# Installs k3s on the nodes of the group nodes, every one a server with
-# embedded etcd, one node at a time: the first starts the cluster, and each
-# other joins it. Then each node gets Helm, its diff plugin and helmfile,
-# and last helmfile applies every chart from the first node. A second run
-# changes nothing and restarts nothing.
+# Installs or upgrades k3s on the nodes, one at a time, then applies every
+# chart with helmfile from the first node. A second run changes nothing. It
+# copies only what cmd/fill put into files/.
 #
 #   ansible-playbook install.yml
 #
-# helmfile reads the charts' secrets from the controller's environment: see
-# roles/helmfile. --skip-tags helmfile installs k3s alone.
-- name: Download
-  ansible.builtin.import_playbook: download.yml
-
-- name: Install k3s
+# The inventory sets selinux=true or false for the nodes, and the
+# environment holds the charts' secrets: see roles/helmfile.
+- name: k3s
   hosts: nodes
   serial: 1
-  roles:
-    - k3s
-    - helm
+  roles: [k3s]
 
-- name: Apply every chart
-  hosts: nodes[0]
-  tags: [helmfile]
-  roles:
-    - helmfile
+- name: Charts
+  hosts: nodes
+  roles: [helmfile]

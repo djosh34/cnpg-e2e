@@ -1,4 +1,4 @@
-# golangci-lint v2.15.0 settings for e2e/: every ignored error is a
+# golangci-lint v2.15.0 settings: every ignored error is a
 # finding. The lint job of ci.yml runs it and fails on any nolint comment,
 # which no setting can turn off.
 version: "2"

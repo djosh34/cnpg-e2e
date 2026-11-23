@@ -1,29 +1,22 @@
-# Every version of the system under test that an e2e run uses, and a values
-# file of every release. Every chart and every image the charts and the
-# cluster run are this repo's packages under ghcr.io/djosh34/cnpg-e2e:
-# copies of Docker Hardened Images (DHI), and of the upstream barman-cloud
-# chart, which DHI does not have, each image pinned by the digest of its
-# linux/amd64 image, not of its index. e2e/cmd/mirror
-# copies them by the tags named here and writes the digests it copied. The
-# nightly runs it with -latest, which also moves each tag to the newest one
-# of its kind, and releases the file it writes.
+# Every version the cluster runs, and under lab: what the e2e lab runs.
+# Every chart and cluster image is a package of ghcr.io/djosh34/cnpg-e2e: a
+# copy of a Docker Hardened Image or chart, or of the upstream barman-cloud
+# chart, which DHI does not have. Images are pinned by the digest of their
+# linux/amd64 image. cmd/mirror copies them by these tags and writes the
+# digests; the nightly moves each tag to the newest of its kind.
 
-# The k3s release of the nodes. The playbooks of ansible/ copy its binary,
-# its install script and the airgap tarball to every node, and k3s imports
-# the tarball's images: those of the release's k3s-images.txt.
 k3s:
   version: "v1.37.2+k3s1"
   binary:
-    amd64:
-      url: https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s
-      sha256: 265b3ee6a3198ef14033c63ef46cbb32370d83795199fb6d1b01f21575eddbda
+    url: https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s
+    sha256: 265b3ee6a3198ef14033c63ef46cbb32370d83795199fb6d1b01f21575eddbda
   install:
     url: https://raw.githubusercontent.com/k3s-io/k3s/v1.37.2%2Bk3s1/install.sh
     sha256: ed01f89fd977bf20ac1516bbebf8370bf3ddbaa55dac8aba610956a4c78cc00b
   airgap:
-    amd64:
-      url: https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s-airgap-images-amd64.tar.zst
-      sha256: 35a5af1e69b57b8b627a4f6b1c29ea104209b661067b8c97fd40dc3f860bfcd2
+    url: https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s-airgap-images-amd64.tar.zst
+    sha256: 35a5af1e69b57b8b627a4f6b1c29ea104209b661067b8c97fd40dc3f860bfcd2
+  # The images in the airgap tarball, which k3s imports.
   images:
     - docker.io/rancher/klipper-helm:v0.13.3-build20261021
     - docker.io/rancher/klipper-lb:v0.4.17
@@ -33,30 +26,24 @@ k3s:
     - docker.io/rancher/mirrored-library-traefik:3.7.15
     - docker.io/rancher/mirrored-metrics-server:v0.9.0
     - docker.io/rancher/mirrored-pause:3.10.2
-  # k3s's script that makes new CAs, each cross-signed by the old one, of
-  # the release. ansible/rotate-ca.yml runs it on the first node.
+  # k3s's script that makes new CAs, for rotate-ca.yml.
   rotate-ca:
     url: https://raw.githubusercontent.com/k3s-io/k3s/v1.37.2%2Bk3s1/contrib/util/rotate-default-ca-certs.sh
     sha256: 62ef79f530cd285b3cfce884746abe6c3712ad70d0ef66e81f76aaa93c30551b
-  # The release one minor before, which the k3s upgrade scenarios install
-  # first: install.yml with k3s_previous=true copies its files.
+  # The minor before, which the upgrade scenario installs first.
   previous:
     version: "v1.36.6+k3s1"
     binary:
-      amd64:
-        url: https://github.com/k3s-io/k3s/releases/download/v1.36.6%2Bk3s1/k3s
-        sha256: 66ceb8e67edfa547195135d74783bfadc2ecc04a91059e90ae5f70a3dbc98c15
+      url: https://github.com/k3s-io/k3s/releases/download/v1.36.6%2Bk3s1/k3s
+      sha256: 66ceb8e67edfa547195135d74783bfadc2ecc04a91059e90ae5f70a3dbc98c15
     install:
       url: https://raw.githubusercontent.com/k3s-io/k3s/v1.36.6%2Bk3s1/install.sh
       sha256: 46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad
     airgap:
-      amd64:
-        url: https://github.com/k3s-io/k3s/releases/download/v1.36.6%2Bk3s1/k3s-airgap-images-amd64.tar.zst
-        sha256: b3029b1a682b8597587e89f5b1c48493e579a6ea1d0ec6a9aac718a8c356e5be
+      url: https://github.com/k3s-io/k3s/releases/download/v1.36.6%2Bk3s1/k3s-airgap-images-amd64.tar.zst
+      sha256: b3029b1a682b8597587e89f5b1c48493e579a6ea1d0ec6a9aac718a8c356e5be
 
-# The SELinux policies that the playbooks install on nodes with selinux on,
-# before k3s: container-selinux of Rocky Linux 9.9 and k3s-selinux, which
-# needs it. Everything else they need comes with Rocky Linux 9.9.
+# The SELinux policies for nodes with selinux=true, of Rocky Linux 9.9.
 selinux:
   container-selinux:
     url: https://dl.rockylinux.org/pub/rocky/9.9/AppStream/x86_64/os/Packages/c/container-selinux-2.250.0-1.el9.noarch.rpm
@@ -65,8 +52,7 @@ selinux:
     url: https://github.com/k3s-io/k3s-selinux/releases/download/v1.6.stable.1/k3s-selinux-1.6-1.el9.noarch.rpm
     sha256: 23d0095a766b89317d2bdbe8773825987db7221e48743417930a994ca1096793
 
-# What the playbooks install on every node for the reconcile, each a release
-# archive: Helm, its diff plugin and helmfile.
+# What runs helmfile apply on the nodes.
 nodeTools:
   helm:
     url: https://get.helm.sh/helm-v4.3.2-linux-amd64.tar.gz
@@ -78,63 +64,40 @@ nodeTools:
     url: https://github.com/helmfile/helmfile/releases/download/v1.8.4/helmfile_1.8.4_linux_amd64.tar.gz
     sha256: 1f19ced8adb0cdf2350e94ca598cf64e390d8c21d0d9b4bdc1c9f246d4591c9d
 
-# The tools of the e2e test that have to match the cluster: kubectl of the
-# k3s release's Kubernetes version and kubectl-cnpg of the operator's
-# version.
-tools:
-  kubectl:
-    version: "v1.37.2"
-    sha256:
-      amd64: c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
-  kubectl-cnpg:
-    version: "1.30.2"
-    sha256:
-      amd64: a926584a2506f2beff624af03d22eb742d6227e259e364e603ea2f88a791a507
-
-# The upstream charts, as OCI charts, by version and by the digest of their
-# OCI manifest. name is the package's chart. The controller fetches each by
-# its digest, and helm/helmfile.yaml.gotmpl installs it from that file,
-# upstream/<key>.tgz next to it.
+# The upstream charts, by version. Each is the dependency of its wrapper,
+# helm/charts/cnpg-<key>.
 charts:
   cert-manager:
     name: cert-manager-chart
     repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "1.21.3"
-    digest: sha256:d7c2de29812898cd64ca1745628df37b78da74b7e21dfac4e5628b6407235b42
   cloudnative-pg:
     name: cloudnative-pg-chart
     repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.29.2"
-    digest: sha256:9089c1dea04e7b664cb641b26191574fd33900d3ca6fe0790824c3ccff18cdfa
   opentelemetry-collector:
     name: opentelemetry-collector-chart
     repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.182.0"
-    digest: sha256:2b535b9ec030a3659fcf6c51279aa4d6ff292dc936aaccc378a28cbbbb1b506d
   plugin-barman-cloud:
     name: plugin-barman-cloud
     repository: oci://ghcr.io/djosh34/cnpg-e2e
     version: "0.9.0"
-    digest: sha256:d34ada2eedffaee9153c6ae31e0e5b93fd28765cc8fba7c5fb45d4ed6b60df1a
 
-# The registry of the nodes, CNCF Distribution v3, which also takes the
-# images the fill copies in, and the pause image of the prepull.
+# The registry of every node, and the pause image of the prepull.
 registry:
   image: ghcr.io/djosh34/cnpg-e2e/distribution-registry:3.1.2@sha256:d16cd3bc16dfc572557f777846238fe8345d673cfc7893dedfc16b8f3a56ce27
 prepull:
   image: ghcr.io/djosh34/cnpg-e2e/kubernetes-pause:3.10.2@sha256:49ef087f915d69f1b84b360e4449519fe09bb6790078855231ffc0083d377a4b
 
-# The instance image, which the cnpg-cluster chart reads. It names postgres
-# 70, so the cluster gets that uid and gid.
+# The instance image. It names postgres 70.
 postgresql:
   imageName: ghcr.io/djosh34/cnpg-e2e/postgres:18.7-debian13@sha256:d5cd060c106966f69554ed8fd97c016fdf6a28b168c6bf91cba108a8b90866f0
   postgresUID: 70
   postgresGID: 70
 
-# The images of the upstream charts, each block in its chart's own values,
-# pinned by digest: helm/helmfile.yaml.gotmpl gives each release its block.
-# The DHI charts default to the registry dhi.io, so each block that has
-# registry sets it.
+# The image values of the upstream charts, each in its chart's own form.
+# The DHI charts default to dhi.io, so each block with registry sets it.
 cert-manager:
   image:
     registry: ghcr.io
@@ -182,10 +145,8 @@ plugin-barman-cloud:
     repository: djosh34/cnpg-e2e/cloudnative-pg-plugin-barman-cloud-sidecar
     tag: "0.16.0@sha256:5b5bfe8f41215b85840727f6020b58aba650b3c8d8fcb28141814b53b7c1da99"
 
-# The two collectors, the releases otel-agent and otel-cluster, both of the
-# opentelemetry-collector chart, on DHI's contrib build. The chart starts
-# otelcol-k8s, which this image does not have: an empty command.name leaves
-# the command out, so the image's own entrypoint, otelcol-contrib, runs.
+# The collectors otel-agent and otel-cluster, on DHI's contrib build, which
+# has no otelcol-k8s: an empty command.name runs the image's own entrypoint.
 agent:
   command:
     name: ""
@@ -200,3 +161,30 @@ cluster:
     repository: ghcr.io/djosh34/cnpg-e2e/opentelemetry-collector
     tag: "0.165.0-contrib"
     digest: sha256:c83caf23643786d88605167e77cdb95bc97c7a2eb213fe6c884927026afae5d0
+
+# The e2e lab. Fill, the prepull and the mirror skip it.
+lab:
+  # The bases of the images in images/.
+  node: quay.io/rockylinux/rockylinux:9.9@sha256:7b2eba7b6bf1c5c93f343c5f03a582e4e32ffd7c19187010c6aa2a848bce295a
+  controller: python:3.14.10-slim-trixie@sha256:ac25e5afbfdb4a94ff99cc24b0345719210133144481480bcba6085efa36a341
+  ansible-core: "2.22.0"
+  vm: debian:trixie-20261104-slim@sha256:7378260c0a098d27ac206225db5e7d92b8c7c84ea7afccc86eeb513756bbd392
+  vm-disk:
+    url: https://dl.rockylinux.org/pub/rocky/9.9/images/x86_64/Rocky-9-GenericCloud-Base-9.9-20261112.0.x86_64.qcow2
+    sha256: 4f88f4209de50813d8054ab97309e7169a580206a0c4ea04f375d36c4846d50e
+  # The services outside k3s.
+  dns: coredns/coredns:1.15.0@sha256:3429e3bbffb1e839470c4a3541d4d78aca84a1394c75a539d0200c58c63196ac
+  acme: openbao/openbao:2.7.2@sha256:a78eb12a9fc7a3ebb4bec1724e2bdd6a28e33394820641d061166919a3f1866b
+  s3: ghcr.io/versity/versitygw:v1.10.0@sha256:2df780de109d16491cb99c25f4c0bc9085b286e77b5b47b56121b340094e70bb
+  otel: otel/opentelemetry-collector-contrib:0.163.2@sha256:989669581ee1f89184f3fd9dd5adfc6615ed6c9692c026aaea89e07a20dfb177
+  prometheus: prom/prometheus:v3.7.3@sha256:6573196e5dbe834779ac4d34cb053113cc502a69e9e20ba3be96d37f33e81545
+  alertmanager: prom/alertmanager:v0.34.1@sha256:84967b9b7ba45e38a9278d3e594305f43d4993c310df3905b51138b816c365f3
+  grafana: grafana/grafana:12.4.12@sha256:a3b504df900c24db125e5ec0646f3ac3428db38161302d69f05d0db70a330a90
+  # The tools the e2e runs against the cluster: kubectl of k3s's
+  # Kubernetes and kubectl-cnpg of the operator.
+  kubectl:
+    version: "v1.37.2"
+    sha256: c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
+  kubectl-cnpg:
+    version: "1.30.2"
+    sha256: a926584a2506f2beff624af03d22eb742d6227e259e364e603ea2f88a791a507

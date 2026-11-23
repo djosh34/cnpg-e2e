@@ -1,7 +1,0 @@
-.:53 {
-    hosts /etc/coredns/hosts {
-        fallthrough
-    }
-    forward . /etc/resolv.conf
-    errors
-}

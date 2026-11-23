@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -13,20 +13,16 @@ import (
 )
 
 // The vocabulary: every thing a line can name, and what each word does to
-// it. A line's roles are replaced by <role> and its numbers by <n> before the
-// lookup, so "replica 1 is promoted" looks up "<role> | promoted". A word is
-// one of four kinds:
+// it. A line's roles are <role> and its numbers <n> in the key, so "replica
+// 1 is promoted" looks up "<role> | promoted". A word is one of:
 //
-//   - an event, which the e2e test does, in a Given or When line; mark names it
+//   - an event, which the e2e does, in a Given or When line; mark names it
 //     for later lines, as in "after the promote";
-//   - a state, which the e2e test checks in a Given or Then line: now, waiting
-//     up to the line's limit, or for the line's time;
-//   - a measure over the whole scenario, whose line gives the limit; with
-//     back, also a state after an event, in "< N s after the <event>";
-//   - a check of the time since an event, in "has been ... since the
-//     <event>".
-//
-// A line whose thing and word are not here fails the run.
+//   - a state, which the e2e checks in a Given or Then line, waiting up to
+//     the line's limit, else up to its own limit, or checking now without;
+//   - a measure over the whole scenario, with its limit; with back, also
+//     when it is back after an event;
+//   - a check of the time since an event.
 type word struct {
 	mark    string
 	event   func(context.Context, *scenario, args) error
@@ -34,96 +30,95 @@ type word struct {
 	longest func(context.Context, *scenario) (time.Duration, error)
 	since   func(context.Context, *scenario, args, time.Time) error
 	back    func(context.Context, *scenario, time.Time) (time.Time, error)
-	// A measure whose limit in always.feature a scenario's own line sets.
-	scenarioLimit bool
-	// A measure that takes the limit of writing where the primary changed or
-	// stopped: the client reads on rw only, so its reads stop then as its
-	// writes do.
-	writingLimit bool
+	// In seconds.
+	limit int
 }
 
 var vocabulary = map[string]word{
 	// Events.
-	"<role> | promoted":                                            {mark: "promote", event: promote},
-	"<role> | fenced":                                              {mark: "fence", event: fence},
-	"<role> | unfenced":                                            {mark: "unfence", event: unfence},
-	"writing | stops":                                              {event: stopWriting},
-	"a row | written":                                              {event: writeRow},
-	"<role>'s node | killed":                                       {mark: "kill", event: killNodes},
-	"<role>'s node and <role>'s node | killed":                     {mark: "kill", event: killNodes},
-	"the node | starts":                                            {mark: "start", event: startKilled(1)},
-	"the nodes | start":                                            {mark: "start", event: startKilled(2)},
-	"<role>'s postgres container | killed":                         {event: killPostgres},
-	"the catalog | read on <role>":                                 {event: readCatalog},
-	"<n> MB of WAL | written on <role>":                            {event: writeWAL},
-	"<role>'s WAL | switched":                                      {event: switchWAL},
-	"a backup | taken":                                             {mark: "backup", event: backUp},
-	"pg-restore | restored from the store":                         {mark: "restore", event: restore},
-	"the store | stopped":                                          {event: breakStore("stopped")},
-	"the store | paused":                                           {event: breakStore("paused")},
-	"the store | starts":                                           {event: storeStarts},
-	"<role> | cut off":                                             {event: cutOff},
-	"<role> | reconnected":                                         {event: reconnect},
-	"replay on <role> | paused":                                    {event: replay("pause")},
-	"replay on <role> | resumed":                                   {event: replay("resume")},
-	"replay on <role> and <role> | paused":                         {event: replay("pause")},
-	"replay on <role> and <role> | resumed":                        {event: replay("resume")},
-	"a <n> s statement | committed on <role>":                      {event: longCommit},
-	"a commit | started on <role>":                                 {event: startCommit},
-	"<role>'s data disk | filled to <n> %":                         {event: fillDisk},
-	"the ballast | removed":                                        {event: removeBallast},
-	"sessions | held on <role> up to <n> % of max_connections":     {event: holdSessions},
-	"the held sessions | ended":                                    {event: endSessions},
-	"an unapproved role | created on <role>":                       {event: createRole},
-	"the unapproved role | dropped":                                {event: dropRole},
-	"the exporter's grants | revoked on <role>":                    {event: revokeGrants},
-	"the exporter's grants | given back on <role>":                 {event: giveGrants},
-	"the server certificate | reissued for <n> days":               {event: reissue("server")},
-	"the replication certificate | reissued for <n> days":          {event: reissue("replication")},
-	"the server certificate | reissued":                            {event: reissue("server")},
-	"the replication certificate | reissued":                       {event: reissue("replication")},
-	"the versions file of the checkout | applied with upgrade.yml": {event: upgradeImages},
-	"the k3s CAs | rotated with rotate-ca.yml":                     {event: rotateCAs},
+	"the versions file | installed":                            {event: installed},
+	"main's versions file | installed":                         {event: mainInstalled},
+	"the data disks | mounted":                                 {event: dataDisks},
+	"<role> | promoted":                                        {mark: "promote", event: promote},
+	"<role> | fenced":                                          {mark: "fence", event: fence},
+	"<role> | unfenced":                                        {mark: "unfence", event: unfence},
+	"writing | stops":                                          {event: stopWriting},
+	"a row | written":                                          {event: writeRow},
+	"<role>'s node | killed":                                   {mark: "kill", event: killNodes},
+	"<role>'s node and <role>'s node | killed":                 {mark: "kill", event: killNodes},
+	"the node | starts":                                        {mark: "start", event: startKilled(1)},
+	"the nodes | start":                                        {mark: "start", event: startKilled(2)},
+	"<role>'s postgres container | killed":                     {event: killPostgres},
+	"the catalog | read on <role>":                             {event: readCatalog},
+	"<n> MB of WAL | written on <role>":                        {event: writeWAL},
+	"<role>'s WAL | switched":                                  {event: switchWAL},
+	"a backup | taken":                                         {mark: "backup", event: backUp},
+	"pg-restore | restored from the store":                     {mark: "restore", event: restore},
+	"the store | stopped":                                      {event: breakStore("stopped")},
+	"the store | paused":                                       {event: breakStore("paused")},
+	"the store | starts":                                       {event: storeStarts},
+	"<role> | cut off":                                         {event: cutOff},
+	"<role> | reconnected":                                     {event: reconnect},
+	"replay on <role> | paused":                                {event: replay("pause")},
+	"replay on <role> | resumed":                               {event: replay("resume")},
+	"replay on <role> and <role> | paused":                     {event: replay("pause")},
+	"replay on <role> and <role> | resumed":                    {event: replay("resume")},
+	"a <n> s statement | committed on <role>":                  {event: longCommit},
+	"a commit | started on <role>":                             {event: startCommit},
+	"<role>'s data disk | filled to <n> %":                     {event: fillDisk},
+	"the ballast | removed":                                    {event: removeBallast},
+	"sessions | held on <role> up to <n> % of max_connections": {event: holdSessions},
+	"the held sessions | ended":                                {event: endSessions},
+	"an unapproved role | created on <role>":                   {event: createRole},
+	"the unapproved role | dropped":                            {event: dropRole},
+	"the exporter's grants | revoked on <role>":                {event: revokeGrants},
+	"the exporter's grants | given back on <role>":             {event: giveGrants},
+	"the server certificate | reissued for <n> days":           {event: reissue("server")},
+	"the replication certificate | reissued for <n> days":      {event: reissue("replication")},
+	"the server certificate | reissued":                        {event: reissue("server")},
+	"the replication certificate | reissued":                   {event: reissue("replication")},
+	"the k3s CAs | rotated with rotate-ca.yml":                 {event: rotateCAs},
 
 	// States.
-	"the cluster | healthy":                                      {state: clusterHealthy},
-	"<role> | primary":                                           {state: rolePrimary},
+	"install.yml | idempotent":                                   {state: idempotent},
+	"SELinux | enforcing":                                        {state: enforcing},
+	"every node | on the versions file's k3s":                    {state: onK3s, limit: 600},
+	"every running container | on an image of the versions file": {state: onVersionsFile, limit: 600},
+	"the cluster | healthy":                                      {state: clusterHealthy, limit: 600},
+	"<role> | primary":                                           {state: rolePrimary, limit: 600},
 	"<role> | still primary":                                     {state: rolePrimary},
 	"no instance | promoted":                                     {state: nonePromoted},
-	"<role> | down":                                              {state: postgresDown},
-	"<role>'s postgres container | running":                      {state: postgresRestarted},
-	"<role> | caught up":                                         {state: caughtUp},
-	"<role> | idle after a WAL switch":                           {state: idleAfterSwitch},
-	"the chart's pg_ident lines | on <role>":                     {state: identOn},
+	"<role> | down":                                              {state: postgresDown, limit: 120},
+	"<role>'s postgres container | running":                      {state: postgresRestarted, limit: 300},
+	"<role> | caught up":                                         {state: caughtUp, limit: 600},
+	"<role> | idle after a WAL switch":                           {state: idleAfterSwitch, limit: 900},
+	"the chart's pg_ident lines | on <role>":                     {state: identOn, limit: 600},
 	"the chart's pg_ident lines | on every instance":             {state: identEverywhere},
-	"every image on the nodes | from the manifest":               {state: imagesPinned},
-	"<role>'s WAL | waiting for the store":                       {state: walWaiting},
-	"<role>'s WAL | archived":                                    {state: walArchived},
-	"the backup | done":                                          {state: backupDone},
-	"pg-restore | healthy":                                       {state: restoreHealthy},
+	"<role>'s WAL | waiting for the store":                       {state: walWaiting, limit: 60},
+	"<role>'s WAL | archived":                                    {state: walArchived, limit: 180},
+	"the backup | done":                                          {state: backupDone, limit: 600},
+	"pg-restore | healthy":                                       {state: restoreHealthy, limit: 900},
 	"no acknowledged write | lost":                               {state: noneLost},
 	"no acknowledged write | lost in pg-restore":                 {state: noneLostInRestore},
-	"compliance on pg-restore | healthy":                         {state: restoreCompliant},
-	"the alerts | healthy":                                       {state: alertsHealthy},
-	"the dashboard | healthy":                                    {state: dashboardHealthy},
-	"the exporters | healthy":                                    {state: exportersAnswer},
-	"<role> | not streaming":                                     {state: notStreaming},
+	"compliance on pg-restore | healthy":                         {state: restoreCompliant, limit: 120},
+	"the alerts | healthy":                                       {state: alertsHealthy, limit: 180},
+	"the dashboard | healthy":                                    {state: dashboardHealthy, limit: 180},
+	"the exporters | healthy":                                    {state: exportersAnswer, limit: 60},
+	"<role> | not streaming":                                     {state: notStreaming, limit: 60},
 	"<role>'s metrics | arriving":                                {state: metricsArriving},
-	"the commit | done":                                          {state: commitDone},
+	"the commit | done":                                          {state: commitDone, limit: 60},
 	"the replica lag panel | healthy":                            {state: lagPanelHealthy},
-	"compliance | healthy":                                       {state: compliant},
-	"every running container | on an image of the versions file": {state: onVersionsFile},
-	"the releases whose manifests did not change | at their old revisions": {state: releasesLeftAlone},
-	"every node | on the new CAs":                                          {state: everyNodeOnNewCAs},
+	"compliance | healthy":                                       {state: compliant, limit: 120},
+	"every node | on the new CAs":                                {state: everyNodeOnNewCAs, limit: 300},
 
 	// Since an event.
 	"<role> and <role> | on the dashboard": {since: onDashboard},
 	"writing | down":                       {since: writingDown},
 
-	// Measures, on the client: the longest time without a successful read,
-	// and without an acknowledged write while the client writes.
-	"reading | healthy": {longest: longestReadGap, writingLimit: true},
-	"writing | healthy": {longest: longestWriteGap, back: writingBack, scenarioLimit: true},
+	// Measures, on the client: the longest time without a read, and
+	// without an acknowledged write while the client writes.
+	"reading | healthy": {longest: longestReadGap, limit: 5},
+	"writing | healthy": {longest: longestWriteGap, back: writingBack, limit: 180},
 }
 
 // promote: kubectl cnpg promote; the instance is then the new primary.
@@ -342,14 +337,14 @@ func oneLine(text string) string { return strings.ReplaceAll(text, "\n", "; ") }
 // alertsHealthy: no alert fires, every alert the scenario says fired or
 // fires fired, and no other did but those it says may fire.
 func alertsHealthy(ctx context.Context, s *scenario, _ args) error {
-	firing, err := s.w.mon.firing(ctx)
+	firing, err := s.lab.mon.firing(ctx)
 	if err != nil {
 		return err
 	}
 	if len(firing) > 0 {
 		return fmt.Errorf("still firing: %s", strings.Join(slices.Sorted(maps.Keys(firing)), ", "))
 	}
-	fired, err := s.w.mon.fired(ctx, s.started)
+	fired, err := s.lab.mon.fired(ctx, s.started)
 	if err != nil {
 		return err
 	}
@@ -375,7 +370,7 @@ func alertsHealthy(ctx context.Context, s *scenario, _ args) error {
 
 // dashboardHealthy: every panel of the dashboard has data in Grafana.
 func dashboardHealthy(ctx context.Context, s *scenario, _ args) error {
-	return s.w.mon.dashboardHasData(ctx)
+	return s.lab.mon.dashboardHasData(ctx)
 }
 
 // The two query metrics the exporter checks read: the chart's cn_mapping
@@ -399,7 +394,7 @@ func exportersAnswer(ctx context.Context, s *scenario, _ args) error {
 		return err
 	}
 	for _, metric := range queryMetrics("") {
-		fresh, err := s.w.mon.pods(ctx, "time() - timestamp("+metric+") < 30")
+		fresh, err := s.lab.mon.pods(ctx, "time() - timestamp("+metric+") < 30")
 		if err != nil {
 			return err
 		}
@@ -418,7 +413,7 @@ func onDashboard(ctx context.Context, s *scenario, a args, from time.Time) error
 	if slices.Contains(a.pods, anotherInstance) {
 		return errors.New("name the instances")
 	}
-	longest, err := s.w.mon.shownSince(ctx, "Instances", a.pods, from)
+	longest, err := s.lab.mon.shownSince(ctx, "Instances", a.pods, from)
 	if err == nil || longest > 0 {
 		s.detail = fmt.Sprintf("the longest gap %d evaluations, every 15 s", longest/(15*time.Second))
 	}

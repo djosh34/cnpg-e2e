@@ -1,27 +1,16 @@
-# Every chart of the cluster, as one reconcile: Ansible runs
+# Every chart of the cluster, as one reconcile. Ansible runs helmfile apply
+# on the first node, for a new cluster and a running one alike: it upgrades
+# only the releases whose manifests changed, each once the releases it needs
+# are ready, and rolls back one that fails.
 #
-#   helmfile --file helmfile.yaml.gotmpl apply --skip-diff-on-install
+# The nodes pull every image from the registry on each node. On a new
+# cluster it goes first, from the archive Ansible put on each node, then the
+# prepull puts every image on every node. On a running cluster the prepull
+# goes first, so the nodes have a new registry image before the old one
+# stops. REGISTRY_PRESENT says which.
 #
-# on a node, for a new cluster and for a running one alike. It installs or
-# upgrades only the releases whose manifests changed, each release once the
-# releases it needs are ready, and rolls back a release that fails. The
-# charts are local files: charts/ here, and the upstream charts of the
-# versions file in upstream/, which Ansible copies from the controller.
-#
-# The images come from the registry of every node. On a new cluster it
-# goes first, from the archive Ansible put on each node, then the prepull
-# puts every image of the versions file on every node. On a running cluster
-# the prepull goes first, so the nodes have the new registry image before the
-# old registry stops. Ansible says which: REGISTRY_PRESENT is true when the
-# registry's DaemonSet is there.
-#
-# The secrets and the company CA come only from the environment, which
-# Ansible sets. helmfile writes the values to temporary files for helm,
-# under TMPDIR, which Ansible puts on a tmpfs.
-#
-# PG_RESTORE true adds the release pg-restore: a second cluster that
-# restores the backups and WAL of pg from the store, with EAB keys of its
-# own. Ansible sets it from its variable pg_restore.
+# The secrets come from the environment, which Ansible sets. PG_RESTORE
+# true adds pg-restore, a second cluster restored from pg's backups.
 {{- $v := readFile "../versions/versions.yaml" | fromYaml }}
 {{- $present := eq (requiredEnv "REGISTRY_PRESENT") "true" }}
 {{- $restore := eq (env "PG_RESTORE") "true" }}
@@ -53,38 +42,34 @@ releases:
     needs: {{ if $present }}[]{{ else }}[registry/registry]{{ end }}
     values:
       - image: {{ $v.prepull.image | toJson }}
-        versions: {{ omit $v "k3s" "charts" | toJson }}
+        versions: {{ omit $v "k3s" "charts" "lab" | toJson }}
 
   - name: cert-manager
     namespace: cert-manager
-    chart: ./upstream/cert-manager.tgz
+    chart: ./charts/cnpg-cert-manager
     needs: [registry/prepull]
     values:
-      - values/cert-manager.yaml
-      - {{ index $v "cert-manager" | toJson }}
+      - cert-manager-chart: {{ index $v "cert-manager" | toJson }}
 
   - name: cnpg
     namespace: cnpg-system
-    chart: ./upstream/cloudnative-pg.tgz
+    chart: ./charts/cnpg-cloudnative-pg
     needs: [registry/prepull]
     values:
-      - values/cloudnative-pg.yaml
-      - {{ index $v "cloudnative-pg" | toJson }}
+      - cloudnative-pg-chart: {{ index $v "cloudnative-pg" | toJson }}
 
   # Its webhook's certificate is cert-manager's, and it serves CNPG.
   - name: barman-cloud
     namespace: cnpg-system
-    chart: ./upstream/plugin-barman-cloud.tgz
+    chart: ./charts/cnpg-plugin-barman-cloud
     needs: [cert-manager/cert-manager, cnpg-system/cnpg]
     values:
-      - values/barman-cloud.yaml
-      - {{ index $v "plugin-barman-cloud" | toJson }}
-      # The chart gives the plugin its sidecar image through a ConfigMap,
-      # which the plugin reads only when it starts. A new sidecar image
-      # changes this annotation and so restarts the plugin, before pg, which
-      # needs it, restarts its instances.
-      - podAnnotations:
-          sidecar-image: {{ (index $v "plugin-barman-cloud").sidecarImage.tag | toJson }}
+      - plugin-barman-cloud: {{ index $v "plugin-barman-cloud" | toJson }}
+      # The plugin reads its sidecar image only when it starts, so a new
+      # one restarts it, before pg restarts its instances.
+      - plugin-barman-cloud:
+          podAnnotations:
+            sidecar-image: {{ (index $v "plugin-barman-cloud").sidecarImage.tag | toJson }}
 
   - name: pg
     namespace: databases
@@ -147,18 +132,16 @@ releases:
 
   - name: otel-agent
     namespace: otel
-    chart: ./upstream/opentelemetry-collector.tgz
+    chart: ./charts/cnpg-opentelemetry-collector
     needs: [registry/prepull, otel/otel-client]
     values:
-      - values/otel.yaml
       - values/otel-agent.yaml
-      - {{ $v.agent | toJson }}
+      - opentelemetry-collector-chart: {{ $v.agent | toJson }}
 
   - name: otel-cluster
     namespace: otel
-    chart: ./upstream/opentelemetry-collector.tgz
+    chart: ./charts/cnpg-opentelemetry-collector
     needs: [registry/prepull, otel/otel-client]
     values:
-      - values/otel.yaml
       - values/otel-cluster.yaml
-      - {{ $v.cluster | toJson }}
+      - opentelemetry-collector-chart: {{ $v.cluster | toJson }}

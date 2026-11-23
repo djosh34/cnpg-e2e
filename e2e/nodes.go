@@ -1,26 +1,13 @@
-package e2e
+package main
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
 )
-
-// Three k3s servers with embedded etcd, as the three machines of
-// production: containers of the node image on the lab's network, each with
-// its name as host name and k3s node name.
-const (
-	nodeCount = 3
-	domain    = "example.test"
-)
-
-func nodeName(i int) string { return fmt.Sprintf("k3s-%d", i+1) }
-func nodeHost(i int) string { return nodeName(i) + "." + domain }
-func nodeIP(i int) string   { return fmt.Sprintf("10.77.0.%d", 11+i) }
 
 // stopNodes stops node containers at once, as docker stop -t 0 does, as lost
 // machines.
@@ -42,7 +29,7 @@ func restartNodes(ctx context.Context, nodes ...string) error {
 	return nil
 }
 
-// useRunningAPI points the e2e test's kubeconfig at the API server of the
+// useRunningAPI points the run's kubeconfig at the API server of the
 // first node that is not down.
 func useRunningAPI(down []string) error {
 	for i := range nodeCount {

@@ -1,9 +1,6 @@
 Feature: Monitoring
   The alert rules and the dashboard, against the events they are for.
 
-  Background:
-    Given the cluster is healthy
-
   @exporter-node-loss
   Scenario: The other instances raise no false metrics alert while a node is lost for over 5 minutes
     Each node is lost for longer than the 5 min after which Kubernetes marks
@@ -13,7 +10,8 @@ Feature: Monitoring
     CNPGReplicaDown fires for replica 1, the sample's Alertmanager
     configuration mutes its CNPGMetricsMissing, and not that of replica 2.
 
-    Given the exporters are healthy < 60 s
+    Given a running cluster
+    And the exporters are healthy
     When replica 1's node is killed
     Then CNPGReplicaDown fires for replica 1 < 420 s after the kill
     And Alertmanager sends CNPGReplicaDown for replica 1 < 60 s
@@ -25,16 +23,16 @@ Feature: Monitoring
     Then the primary is still primary
     And the primary and replica 2 have been on the dashboard since the kill
     When the node starts
-    Then the cluster is healthy < 600 s
-    And the exporters are healthy < 60 s
+    Then the cluster is healthy
+    And the exporters are healthy
     When the primary's node is killed
-    Then another instance is primary < 600 s
+    Then another instance is primary
     And CNPGReplicaDown fires for the primary < 420 s after the kill
     When 400 s pass after the kill
     Then replica 1 and replica 2 have been on the dashboard since the kill
     When the node starts
-    Then the cluster is healthy < 600 s
-    And the exporters are healthy < 60 s
+    Then the cluster is healthy
+    And the exporters are healthy
     And CNPGMetricsMissing has not fired for the primary
     And CNPGMetricsMissing has not fired for replica 1
     And CNPGMetricsMissing has not fired for replica 2
@@ -47,12 +45,13 @@ Feature: Monitoring
     WAL receiver, the replica reports the age of its last transaction as its
     lag, so CNPGReplicaLag fires too.
 
+    Given a running cluster
     When replica 1 is cut off
-    Then replica 1 is not streaming < 60 s
+    Then replica 1 is not streaming
     And CNPGReplicaDown fires for replica 1 < 480 s
     And replica 1's metrics are arriving
     When replica 1 is reconnected
-    Then the cluster is healthy < 600 s
+    Then the cluster is healthy
     And CNPGReplicaDown resolves for replica 1 < 120 s
     And CNPGReplicaLag fired for replica 1
 
@@ -63,6 +62,7 @@ Feature: Monitoring
     pauses on both replicas, so a commit waits for a standby to apply it, as
     when no synchronous standby confirms.
 
+    Given a running cluster
     When replay on replica 1 is paused
     Then CNPGReplicaLag fires for replica 1 < 300 s
     And Alertmanager sends CNPGReplicaLag for replica 1 < 60 s
@@ -87,14 +87,15 @@ Feature: Monitoring
     shows its alert state. The timing table gives the most the chart's
     cnpg_replica_lag_seconds and CNPG's metric reported.
 
+    Given a running cluster
     When replica 1 is promoted
     Then replica 1 is primary < 300 s
-    And the cluster is healthy < 600 s
+    And the cluster is healthy
     And the replica lag panel is healthy for 330 s
     When replica 1 is fenced
     And 30 s pass after the fence
     And replica 1 is unfenced
-    Then the cluster is healthy < 600 s
+    Then the cluster is healthy
     And replica 1 is still primary
     And the replica lag panel is healthy for 330 s
     And CNPGReplicaLag has not fired for the primary

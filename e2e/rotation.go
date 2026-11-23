@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -26,7 +26,7 @@ const k3sServerDir = "/var/lib/rancher/k3s/server"
 
 // rotateCAs: rotate-ca.yml runs on the nodes.
 func rotateCAs(ctx context.Context, s *scenario, _ args) error {
-	out, err := s.w.lab.playbook(ctx, nil, "rotate-ca.yml")
+	out, err := s.lab.playbook(ctx, nil, "rotate-ca.yml")
 	if err != nil {
 		return err
 	}
@@ -192,7 +192,7 @@ func nodeCert(ctx context.Context, node, path string) (*x509.Certificate, error)
 var clientCertData = regexp.MustCompile(`client-certificate-data: (\S+)`)
 
 // nodeKubeconfig is a copy of the admin kubeconfig k3s wrote on node i, at
-// that node's API server, next to the e2e test's kubeconfig, and its client
+// that node's API server, next to the run's kubeconfig, and its client
 // certificate.
 func nodeKubeconfig(ctx context.Context, i int) (string, *x509.Certificate, error) {
 	data, err := command(ctx, "docker", "exec", nodeName(i), "cat", "/etc/rancher/k3s/k3s.yaml")

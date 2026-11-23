@@ -1,4 +1,4 @@
-# The e2e test's values for the release pg, on top of cluster.yaml. The company
+# The e2e's values for the release pg, on top of cluster.yaml. The company
 # CA approves only the node names, and the store has a certificate of that CA.
 # helmfile.yaml.gotmpl adds the CA and the keys.
 acme:

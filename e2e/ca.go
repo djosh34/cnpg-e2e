@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"crypto/ecdsa"
@@ -12,7 +12,7 @@ import (
 )
 
 // The company CA of one run: a new root key and certificate. OpenBao imports
-// it and issues every ACME certificate from it; the e2e test itself signs only
+// it and issues every ACME certificate from it; the e2e itself signs only
 // the TLS certificates of the ACME server and the store with it.
 type ca struct {
 	cert    *x509.Certificate

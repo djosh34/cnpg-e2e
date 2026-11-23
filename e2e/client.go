@@ -1,4 +1,4 @@
-package e2e
+package main
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,40 +15,21 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
-// The application host: the client image, outside k3s, with its own name
-// and its own certificate from the company CA. The e2e test reads only its log.
-const (
-	clientIP   = "10.77.0.40"
-	clientName = "orders-app.test"
-)
-
-// The client image: the client binary, built for amd64 from client/,
-// with the two-line Dockerfile there.
-const clientImage = "cnpg-e2e-client:local"
-
-// buildClient builds the client image, with dir for the build's files.
-func buildClient(ctx context.Context, dir string) error {
-	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", filepath.Join(dir, "client"), "./client")
-	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
-	if out, err := build.CombinedOutput(); err != nil {
-		return fmt.Errorf("go build ./client: %w: %s", err, out)
-	}
-	dockerfile, err := os.ReadFile("client/Dockerfile")
+// startClient starts the client, the application outside the cluster, in
+// the controller's image with a new EAB key, and returns once it has read
+// and, when it writes, written. It reads and writes through GORM on rw
+// only.
+func (s *scenario) startClient(ctx context.Context) error {
+	bin, err := cacheFile("client")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), dockerfile, 0o644); err != nil {
-		return err
+	build := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", bin, "./e2e/client")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
+	if out, err := build.CombinedOutput(); err != nil {
+		return fmt.Errorf("go build ./e2e/client: %w: %s", err, out)
 	}
-	_, err = command(ctx, "docker", "build", "--quiet", "--tag", clientImage, dir)
-	return err
-}
-
-// startClient starts the client on the lab's network with a new EAB key.
-// It returns once the client has read and, when it writes, written. The
-// client reads and writes through GORM on rw only.
-func (w *world) startClient(ctx context.Context, writes bool) error {
-	key, err := w.lab.bao.newEAB(ctx)
+	key, err := s.lab.bao.newEAB(ctx)
 	if err != nil {
 		return err
 	}
@@ -57,13 +37,14 @@ func (w *world) startClient(ctx context.Context, writes bool) error {
 	for i := range nodeCount {
 		hosts[i] = nodeHost(i)
 	}
-	_, err = w.lab.run(ctx, labContainer{
-		name: "client", ip: clientIP, image: clientImage,
-		files: map[string]string{"/ca.crt": string(w.lab.root.certPEM)},
+	_, err = s.lab.run(ctx, labContainer{
+		name: "client", ip: clientIP, image: "cnpg-e2e-controller",
+		files:     map[string]string{"/ca.crt": string(s.lab.root.certPEM)},
+		hostFiles: map[string]string{"/client": bin},
 		opts: []testcontainers.ContainerCustomizer{
 			testcontainers.WithEntrypoint("/client"),
 			testcontainers.WithCmd("-name", clientName, "-acme", acmeDirectory, "-ca", "/ca.crt",
-				"-hosts", strings.Join(hosts, ","), "-writes="+strconv.FormatBool(writes)),
+				"-hosts", strings.Join(hosts, ","), "-writes="+strconv.FormatBool(s.writes)),
 			testcontainers.WithEnv(map[string]string{"EAB_KID": key.id, "EAB_HMAC": key.key}),
 		},
 	})
@@ -78,7 +59,7 @@ func (w *world) startClient(ctx context.Context, writes bool) error {
 		if _, ok := log.first("read"); !ok {
 			return fmt.Errorf("no read yet; the client's log ends: %s", log.tail)
 		}
-		if _, ok := log.first("write"); writes && !ok {
+		if _, ok := log.first("write"); s.writes && !ok {
 			return fmt.Errorf("no write yet; the client's log ends: %s", log.tail)
 		}
 		for _, host := range hosts {

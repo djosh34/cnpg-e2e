@@ -1,0 +1,43 @@
+# What the releases otel-agent and otel-cluster share: collectors that send
+# OTLP over gRPC with mTLS to one upstream URL outside the cluster, here the
+# e2e's otel.example.test. The scrapes add the labels monitoring/rules.yaml
+# reads and keep every metric name.
+opentelemetry-collector-chart:
+  command:
+    name: otelcol-k8s
+  service:
+    enabled: false
+  # The collector sends; it opens no port but its health check.
+  ports:
+    otlp: {enabled: false}
+    otlp-http: {enabled: false}
+    jaeger-compact: {enabled: false}
+    jaeger-thrift: {enabled: false}
+    jaeger-grpc: {enabled: false}
+    zipkin: {enabled: false}
+  # The client certificate of the release otel-client, and the company CA.
+  extraVolumes:
+    - name: client
+      secret: {secretName: otel-client}
+    - name: company-ca
+      secret: {secretName: company-ca}
+  extraVolumeMounts:
+    - {name: client, mountPath: /etc/otel/client, readOnly: true}
+    - {name: company-ca, mountPath: /etc/otel/company-ca, readOnly: true}
+  alternateConfig:
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+    exporters:
+      otlp_grpc:
+        endpoint: otel.example.test:4317
+        tls:
+          ca_file: /etc/otel/company-ca/ca.crt
+          cert_file: /etc/otel/client/tls.crt
+          key_file: /etc/otel/client/tls.key
+    service:
+      extensions: [health_check]
+      pipelines:
+        metrics:
+          receivers: [prometheus]
+          exporters: [otlp_grpc]
