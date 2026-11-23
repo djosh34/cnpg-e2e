@@ -50,6 +50,14 @@ func poll(ctx context.Context, deadline time.Time, check func(context.Context) e
 	}
 }
 
+// statusError is the answer of an HTTP call with a status other than 2xx.
+type statusError struct {
+	code int
+	msg  string
+}
+
+func (e statusError) Error() string { return e.msg }
+
 // callJSON sends req and decodes the JSON answer into out, when out is not
 // nil. An answer other than 2xx, or an empty one where out wants JSON, is an
 // error.
@@ -63,7 +71,7 @@ func callJSON(client *http.Client, req *http.Request, out any) error {
 		return err
 	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("%s %s: %s: %s", req.Method, req.URL.Redacted(), resp.Status, bytes.TrimSpace(data))
+		return statusError{resp.StatusCode, fmt.Sprintf("%s %s: %s: %s", req.Method, req.URL.Redacted(), resp.Status, bytes.TrimSpace(data))}
 	}
 	if out == nil {
 		return nil

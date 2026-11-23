@@ -1,11 +1,13 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -40,6 +42,7 @@ const (
 // prerelease as the asset versions.yaml, and so does each code release.
 const (
 	releasesURL   = "https://api.github.com/repos/djosh34/cnpg-e2e/releases?per_page=100"
+	latestURL     = "https://api.github.com/repos/djosh34/cnpg-e2e/releases/latest"
 	versionsAsset = "versions.yaml"
 )
 
@@ -163,29 +166,35 @@ func containersOn(pods string, m *versions.Manifest) error {
 	return errors.Join(errs...)
 }
 
+var nightlyFlag = flag.Bool("nightly", false, "with -scenario image-upgrade: start from the newest release, a nightly's prerelease too")
+
 // upgradeFrom is the versions file the image upgrade starts from: the
-// versions.yaml of the newest code release that has one, or when there is
-// none or it is the checkout's, the newest version of
-// versions/versions.yaml in main's history that differs from the
-// checkout's: on a pull request that changes it, main's own, and on main
-// the one before. Not a nightly's: a pull request's file can be older than
-// last night's, and the scenario would downgrade. It keeps the k3s of the checkout's
-// versions file: the scenario upgrades images, and k3s takes no downgrade.
-// It returns where it is from, its content and what it pins.
+// versions.yaml of a release (fromRelease), or when there is none, the
+// newest version of versions/versions.yaml in main's history that deploys
+// something else: on a pull request that changes it, main's own, and on
+// main the one before. Two files deploy the same when they differ only in
+// k3s or comments. It keeps the k3s of the checkout's versions file: the
+// scenario upgrades images, and k3s takes no downgrade. It returns where it
+// is from, its content and what it pins.
 func upgradeFrom(ctx context.Context) (string, []byte, *versions.Manifest, error) {
 	current, err := os.ReadFile(versionsFile)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	from, data, err := newestRelease(ctx)
-	if err == nil && (data == nil || strings.TrimSpace(string(data)) == strings.TrimSpace(string(current))) {
-		from, data, err = previousOnMain(ctx, current)
-	}
+	want, err := withK3s(current, current)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	if data, err = withK3s(data, current); err != nil {
-		return "", nil, nil, fmt.Errorf("the versions file of %s: %w", from, err)
+	other := func(data []byte) ([]byte, bool, error) {
+		merged, err := withK3s(data, current)
+		return merged, err == nil && !bytes.Equal(merged, want), err
+	}
+	from, data, err := fromRelease(ctx, other)
+	if err == nil && data == nil {
+		from, data, err = previousOnMain(ctx, other)
+	}
+	if err != nil {
+		return "", nil, nil, err
 	}
 	before, err := versions.Parse(data)
 	if err != nil {
@@ -211,42 +220,73 @@ func withK3s(data, current []byte) ([]byte, error) {
 	return yaml.Marshal(file)
 }
 
-// newestRelease is the asset versions.yaml of the newest release of this
-// repo that has one and is no prerelease, and where it is from, or nothing
-// when no such release has one. The releases are public. GITHUB_TOKEN, when set, raises the API's
-// rate limit.
-func newestRelease(ctx context.Context) (string, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
+// fromRelease is the versions.yaml of the release the image upgrade
+// starts from, with the checkout's k3s, and where it is from, or nothing.
+// With -nightly, as the nightly runs it, that is the newest of the latest
+// 100 releases whose file is another than the checkout's (other): last
+// night's. Without, it is GitHub's latest release when its file is
+// another, which is never a prerelease, so never a nightly's: a pull
+// request's file can be older than last night's, and the scenario would
+// downgrade. The releases are public. GITHUB_TOKEN, when set, raises the
+// API's rate limit.
+func fromRelease(ctx context.Context, other func([]byte) ([]byte, bool, error)) (string, []byte, error) {
+	type release struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			Name string `json:"name"`
+			URL  string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	var releases []release
+	if *nightlyFlag {
+		if err := getJSON(ctx, releasesURL, &releases); err != nil {
+			return "", nil, err
+		}
+	} else {
+		var latest release
+		err := getJSON(ctx, latestURL, &latest)
+		// No release yet.
+		var status statusError
+		if errors.As(err, &status) && status.code == http.StatusNotFound {
+			return "", nil, nil
+		}
+		if err != nil {
+			return "", nil, err
+		}
+		releases = []release{latest}
+	}
+	for _, r := range releases {
+		for _, a := range r.Assets {
+			if a.Name != versionsAsset {
+				continue
+			}
+			data, err := fetch(ctx, a.URL)
+			if err != nil {
+				return "", nil, err
+			}
+			merged, ok, err := other(data)
+			if err != nil {
+				return "", nil, fmt.Errorf("the versions file of the release %s: %w", r.TagName, err)
+			}
+			if ok {
+				return "the release " + r.TagName, merged, nil
+			}
+		}
+	}
+	return "", nil, nil
+}
+
+// getJSON decodes the answer of GitHub's API at url into out.
+func getJSON(ctx context.Context, url string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", nil, err
+		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	var releases []struct {
-		TagName    string `json:"tag_name"`
-		Prerelease bool   `json:"prerelease"`
-		Assets     []struct {
-			Name string `json:"name"`
-			URL  string `json:"browser_download_url"`
-		} `json:"assets"`
-	}
-	if err := callJSON(&http.Client{Timeout: time.Minute}, req, &releases); err != nil {
-		return "", nil, err
-	}
-	for _, r := range releases {
-		if r.Prerelease {
-			continue
-		}
-		for _, a := range r.Assets {
-			if a.Name == versionsAsset {
-				data, err := fetch(ctx, a.URL)
-				return "the release " + r.TagName, data, err
-			}
-		}
-	}
-	return "", nil, nil
+	return callJSON(&http.Client{Timeout: time.Minute}, req, out)
 }
 
 // main as a clone of this repo has it.
@@ -254,7 +294,7 @@ const mainBranch = "origin/main"
 
 // previousOnMain is the newest version of versions/versions.yaml in main's
 // history that differs from current, and where it is from.
-func previousOnMain(ctx context.Context, current []byte) (string, []byte, error) {
+func previousOnMain(ctx context.Context, other func([]byte) ([]byte, bool, error)) (string, []byte, error) {
 	out, err := command(ctx, "git", "-C", "..", "log", "--format=%H", mainBranch, "--", "versions/versions.yaml")
 	if err != nil {
 		return "", nil, err
@@ -264,8 +304,12 @@ func previousOnMain(ctx context.Context, current []byte) (string, []byte, error)
 		if err != nil {
 			return "", nil, err
 		}
-		if strings.TrimSpace(data) != strings.TrimSpace(string(current)) {
-			return "the commit " + commit + " of main", []byte(data + "\n"), nil
+		merged, ok, err := other([]byte(data))
+		if err != nil {
+			return "", nil, fmt.Errorf("the versions file of the commit %s of main: %w", commit, err)
+		}
+		if ok {
+			return "the commit " + commit + " of main", merged, nil
 		}
 	}
 	return "", nil, fmt.Errorf("no release has a versions file, and %s has no other versions/versions.yaml; "+

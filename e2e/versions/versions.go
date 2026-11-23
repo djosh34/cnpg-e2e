@@ -344,9 +344,12 @@ func fields(n *yaml.Node) map[string]*yaml.Node {
 // chartSites are where the manifest, a document Parse took, pins its
 // charts: the version and digest of each, as a Pin of its OCI repository
 // and name.
-func chartSites(doc *yaml.Node) []site {
+func chartSites(doc *yaml.Node) ([]site, error) {
 	var sites []site
 	charts := fields(doc.Content[0])["charts"]
+	if charts == nil {
+		return nil, errors.New("charts is not a key of the file itself, such as one of a YAML merge")
+	}
 	for i := 1; i < len(charts.Content); i += 2 {
 		f := fields(charts.Content[i])
 		repo := strings.TrimPrefix(scalar(f["repository"]), "oci://") + "/" + scalar(f["name"])
@@ -355,7 +358,7 @@ func chartSites(doc *yaml.Node) []site {
 			tag: f["version"], digest: f["digest"],
 		})
 	}
-	return sites
+	return sites, nil
 }
 
 // Update is the versions file data with each image and chart it pins moved
@@ -371,9 +374,13 @@ func Update(data []byte, move func(Pin) (Pin, error)) ([]byte, error) {
 	}
 	var w images
 	w.visit(&doc, "")
+	charts, err := chartSites(&doc)
+	if err != nil {
+		return nil, err
+	}
 	moved := map[Pin]Pin{}
 	var edits []edit
-	for _, s := range append(w.sites, chartSites(&doc)...) {
+	for _, s := range append(w.sites, charts...) {
 		to, ok := moved[s.pin]
 		if !ok {
 			var err error

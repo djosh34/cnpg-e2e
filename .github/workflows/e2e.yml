@@ -239,10 +239,13 @@ jobs:
           # For the image upgrade's list of releases.
           GITHUB_TOKEN: ${{ matrix.scenario == 'image-upgrade' && github.token || '' }}
           CACHE: ${{ needs.cache.result }}
+          MIRROR: ${{ needs.mirror.result }}
         run: |
           set -euo pipefail
           flags=()
           if [[ $CACHE == success ]]; then flags+=(-no-build); fi
+          # The nightly's image upgrade starts from last night's release.
+          if [[ $MIRROR == success ]]; then flags+=(-nightly); fi
           go -C e2e test -run '^TestScenario$' -count=1 -timeout 90m -v . -scenario "$SCENARIO" "${flags[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
