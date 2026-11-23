@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   cache:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || inputs.scenarios == 'cache'
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     permissions:
