@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -44,9 +44,10 @@ import (
 //
 // The scenario restore starts the lab from the cache, pulled or built here,
 // checks that the cluster is Ready, fills the registry and runs upgrade.yml,
-// which applies every chart, and checks that the cluster is healthy, as a
-// scenario starts. With -no-build it fails where it would build the cache,
-// as in CI, where the cache job published it before.
+// which applies every chart, and checks that the cluster is healthy, as
+// every scenario of the feature files starts (feature.go). With -no-build
+// those fail where they would build the cache, as in CI, where the cache
+// job published it before.
 const (
 	cacheScenario   = "cache"
 	restoreScenario = "restore"
@@ -58,7 +59,7 @@ const (
 
 var (
 	pushFlag    = flag.Bool("push", false, "with -scenario cache: push a cache it builds to this repo's packages, which only CI does")
-	noBuildFlag = flag.Bool("no-build", false, "with -scenario restore: fail when the cache cannot be pulled, instead of building it")
+	noBuildFlag = flag.Bool("no-build", false, "with a scenario that starts from the cache: fail when the cache cannot be pulled, instead of building it")
 )
 
 // cache is a cache to start the lab from: the image of each container it
@@ -98,7 +99,7 @@ func cacheRef(name, tag string) string {
 // cache leaves out, and the Go code that starts the lab, names its machines
 // and addresses, and sets up the store and the CA.
 var cacheInputs = []string{
-	"../ansible", "lab_test.go", "cache_test.go", "outside.go", "store.go", "ca.go", "nodes.go", "docker.go", "client.go",
+	"../ansible", "lab.go", "cache.go", "outside.go", "store.go", "ca.go", "nodes.go", "client.go",
 }
 
 // cacheTag is the tag of the cache of this checkout: a hash of the images of

@@ -71,7 +71,7 @@ func TestVersionsFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, image := range []string{m.Registry.Image, m.PostgreSQL.ImageName, m.PostgreSQL.RolloutFrom} {
+	for _, image := range []string{m.Registry.Image, m.PostgreSQL.ImageName} {
 		name, d, _ := strings.Cut(image, "@")
 		if !slices.Contains(m.Pinned(), Repository(name)+"@"+d) {
 			t.Errorf("%s is not in Pinned", image)

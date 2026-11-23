@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -24,7 +24,7 @@ import (
 // the cluster is up, before the scenario, and as the last line of
 // always.feature. seen are the tags and digests of every image it listed,
 // or its ID for an image with neither.
-func nodeImagesPinned(ctx context.Context) (seen []string, _ error) {
+func nodeImagesPinned(ctx context.Context, m *versions.Manifest) (seen []string, _ error) {
 	var errs []error
 	for i := range nodeCount {
 		node := nodeName(i)
@@ -37,12 +37,12 @@ func nodeImagesPinned(ctx context.Context) (seen []string, _ error) {
 			seen = append(seen, image.refs()...)
 		}
 		refs, err := command(ctx, "docker", "exec", node,
-			"ctr", "-n", "k8s.io", "images", "ls", "-q", `labels."io.cattle.k3s.pinned"==pinned`)
+			"k3s", "ctr", "-n", "k8s.io", "images", "ls", "-q", `labels."io.cattle.k3s.pinned"==pinned`)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		for _, image := range notInManifest(images, strings.Fields(refs), manifest) {
+		for _, image := range notInManifest(images, strings.Fields(refs), m) {
 			errs = append(errs, fmt.Errorf("%s has an image the manifest does not name: %s", node, image))
 		}
 		pulls, err := command(ctx, "docker", "exec", node, "sh", "-c", containerdPulls)
@@ -50,16 +50,16 @@ func nodeImagesPinned(ctx context.Context) (seen []string, _ error) {
 			errs = append(errs, err)
 			continue
 		}
-		for _, ref := range pulledAirgap(pulls, manifest) {
+		for _, ref := range pulledAirgap(pulls, m) {
 			errs = append(errs, fmt.Errorf("%s pulled the airgap image %s from a registry", node, ref))
 		}
 	}
 	return seen, errors.Join(errs...)
 }
 
-// listImages lists the images on a node with crictl.
+// listImages lists the images on a node with k3s crictl.
 func listImages(ctx context.Context, node string) ([]nodeImage, error) {
-	out, err := command(ctx, "docker", "exec", node, "crictl", "images", "-o", "json")
+	out, err := command(ctx, "docker", "exec", node, "k3s", "crictl", "images", "-o", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func notInManifest(images []nodeImage, imported []string, m *versions.Manifest) 
 
 // imagesPinned: every image on the nodes is one the manifest names.
 func imagesPinned(ctx context.Context, s *scenario, _ args) error {
-	seen, err := nodeImagesPinned(ctx)
+	seen, err := nodeImagesPinned(ctx, s.w.m)
 	s.images = append(s.images, seen...)
 	return err
 }

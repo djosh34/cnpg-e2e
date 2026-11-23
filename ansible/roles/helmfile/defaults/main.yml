@@ -23,3 +23,13 @@ helmfile_env:
   - PG_REPLICATION_EAB_HMAC
   - OTEL_CLIENT_EAB_KID
   - OTEL_CLIENT_EAB_HMAC
+  # Only with pg_restore.
+  - PG_RESTORE_SERVER_EAB_KID
+  - PG_RESTORE_SERVER_EAB_HMAC
+  - PG_RESTORE_REPLICATION_EAB_KID
+  - PG_RESTORE_REPLICATION_EAB_HMAC
+
+# true adds the release pg-restore to the helmfile: a second database
+# cluster that restores the backups and WAL of pg from the store. A later
+# run without it leaves pg-restore as it is.
+pg_restore: false

@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -70,6 +70,10 @@ func reconnect(ctx context.Context, s *scenario, a args) error {
 
 var sandboxID = regexp.MustCompile(`^[0-9a-f]+$`)
 
+// k3sIptables is the iptables k3s brings along, since the nodes have none
+// of their own.
+const k3sIptables = "/var/lib/rancher/k3s/data/current/bin/aux/iptables"
+
 // podFirewall inserts (-I) or deletes (-D) the rule that rejects the pod's
 // connections to port 5432, in the network namespace of its ready sandbox
 // on its node.
@@ -81,19 +85,19 @@ func podFirewall(ctx context.Context, pod, op string) error {
 	if err != nil {
 		return err
 	}
-	id, err := command(ctx, "docker", "exec", node, "crictl", "pods", "-q", "--namespace", namespace, "--name", "^"+pod+"$", "--state", "ready")
+	id, err := command(ctx, "docker", "exec", node, "k3s", "crictl", "pods", "-q", "--namespace", namespace, "--name", "^"+pod+"$", "--state", "ready")
 	if err != nil {
 		return err
 	}
 	if !sandboxID.MatchString(id) {
 		return fmt.Errorf("no single ready pod sandbox of %s on %s: %q", pod, node, id)
 	}
-	pid, err := command(ctx, "docker", "exec", node, "crictl", "inspectp", "-o", "go-template", "--template", "{{.info.pid}}", id)
+	pid, err := command(ctx, "docker", "exec", node, "k3s", "crictl", "inspectp", "-o", "go-template", "--template", "{{.info.pid}}", id)
 	if err != nil {
 		return err
 	}
 	_, err = command(ctx, "docker", "exec", node, "nsenter", "--net=/proc/"+pid+"/ns/net",
-		"iptables", op, "OUTPUT", "-p", "tcp", "--dport", "5432", "-j", "REJECT", "--reject-with", "tcp-reset")
+		k3sIptables, op, "OUTPUT", "-p", "tcp", "--dport", "5432", "-j", "REJECT", "--reject-with", "tcp-reset")
 	return err
 }
 

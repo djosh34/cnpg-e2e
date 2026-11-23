@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -16,14 +15,11 @@ import (
 	"github.com/cucumber/godog"
 )
 
-// A scenario's tag: lower-case words with dashes.
-var scenarioTag = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-
-// runScenario runs the one scenario tagged @<name> of the feature files, on
-// its own new cluster, then always.feature. It returns the exit code: 2
-// also when the scenario ran but the run could not keep its files, so such
-// a fault never looks like a failed line.
-func runScenario(name string, res *results) int {
+// runScenario runs the one scenario tagged @<name> of the feature files on
+// the world, then always.feature, and writes its files to res. It fails
+// when the scenario failed or could not run, and when the run could not
+// keep its files.
+func runScenario(w *world, name string, res *results) error {
 	format := "progress,cucumber:" + res.path("cucumber.json") + ",junit:" + res.path("junit.xml")
 	ran := 0
 	var s *scenario
@@ -38,7 +34,7 @@ func runScenario(name string, res *results) int {
 			sc.Before(func(ctx context.Context, sn *godog.Scenario) (context.Context, error) {
 				ran++
 				s.ctx = ctx
-				return ctx, s.setUp(sn, name)
+				return ctx, s.setUp(w, sn)
 			})
 			sc.After(func(ctx context.Context, sn *godog.Scenario, err error) (context.Context, error) {
 				return ctx, s.tearDown(sn, err)
@@ -54,40 +50,26 @@ func runScenario(name string, res *results) int {
 	status := suite.Run()
 	switch {
 	case ran == 0:
-		say(os.Stderr, "e2e: %s: @%s\n", errNoScenario, name)
-		return 2
+		return fmt.Errorf("no scenario has the tag @%s", name)
 	case ran > 1:
-		say(os.Stderr, "e2e: %d scenarios have the tag @%s; a run runs one\n", ran, name)
-		return 2
+		return fmt.Errorf("%d scenarios have the tag @%s; a run runs one", ran, name)
 	case s.fault != nil:
-		say(os.Stderr, "e2e: the run could not keep its files: %v\n", s.fault)
-		return 2
+		return fmt.Errorf("the run could not keep its files: %w", s.fault)
 	case status != 0:
-		logf("FAILED: %s", name)
-		return 1
+		return fmt.Errorf("the scenario %s failed", name)
 	}
 	logf("PASSED: %s", name)
-	return 0
+	return nil
 }
 
-// The scenario whose cluster starts on the manifest's postgresql.rolloutFrom
-// and rolls out to its postgresql.imageName. Every other cluster starts on
-// postgresql.imageName.
-const rolloutScenario = "rollout"
+// The feature files.
+const featuresDir = "features"
 
-// setUp builds the scenario's cluster, checks the images on the nodes and
-// names the instances.
-func (s *scenario) setUp(sn *godog.Scenario, name string) error {
-	logf("scenario %q: a new cluster", sn.Name)
-	firstImage := manifest.PostgreSQL.ImageName
-	if name == rolloutScenario {
-		firstImage = manifest.PostgreSQL.RolloutFrom
-	}
-	var err error
-	if s.w, err = newWorld(s.ctx, firstImage); err != nil {
-		return err
-	}
-	seen, err := nodeImagesPinned(s.ctx)
+// setUp checks the images on the nodes and names the instances.
+func (s *scenario) setUp(w *world, sn *godog.Scenario) error {
+	logf("scenario %q", sn.Name)
+	s.w = w
+	seen, err := nodeImagesPinned(s.ctx, w.m)
 	s.images = append(s.images, seen...)
 	if err != nil {
 		return err
@@ -137,25 +119,20 @@ func (s *scenario) tearDown(sn *godog.Scenario, err error) error {
 	return errors.Join(err, s.fault)
 }
 
-// nodeLogs writes each node's whole log, k3s's and the kubelet's, to
-// <node>.log, so a node that never registers or turns Ready can be traced.
-// A node that never started has no log.
+// nodeLogs writes the log of k3s on each node, from its journal, to
+// <node>.log, so a node that never turns Ready can be traced. A node that is
+// down at the end has its error there instead.
 func nodeLogs(ctx context.Context, res *results) error {
 	var errs []error
 	for i := range nodeCount {
 		node := nodeName(i)
 		ctx, cancel := context.WithTimeout(ctx, time.Minute)
-		// docker logs prints the container's stderr on its own stderr.
-		out, err := exec.CommandContext(ctx, "docker", "logs", "--timestamps", node).CombinedOutput()
+		log, err := command(ctx, "docker", "exec", node, "journalctl", "--unit", "k3s", "--no-pager", "--output", "short-iso")
 		cancel()
-		if err != nil && strings.Contains(string(out), "No such container") {
-			continue
-		}
 		if err != nil {
-			errs = append(errs, fmt.Errorf("the log of %s: %w: %s", node, err, out))
-			continue
+			log = err.Error()
 		}
-		errs = append(errs, res.write(node+".log", string(out)))
+		errs = append(errs, res.write(node+".log", log+"\n"))
 	}
 	return errors.Join(errs...)
 }
@@ -172,24 +149,20 @@ func (s *scenario) table(name string) string {
 // What the state dump of a failed scenario shows.
 var stateCommands = [][]string{
 	{"docker", "ps", "-a"},
-	// The kernel's last messages: a task blocked for minutes shows here.
-	{"sh", "-c", "set -o pipefail; dmesg | tail -n 50"},
 	{"docker", "logs", "--tail", "30", "dns"},
 	{"docker", "logs", "--tail", "30", "acme"},
 	{"docker", "logs", "--tail", "30", "s3"},
+	{"docker", "logs", "--tail", "30", "registry"},
 	{"docker", "logs", "--tail", "30", "client"},
 	{"docker", "logs", "--tail", "30", "otel"},
 	{"docker", "logs", "--tail", "30", "prometheus"},
 	{"docker", "logs", "--tail", "30", "alertmanager"},
 	{"docker", "logs", "--tail", "30", "grafana"},
-	{"docker", "logs", "--tail", "30", "k3s-1"},
-	{"docker", "logs", "--tail", "30", "k3s-2"},
-	{"docker", "logs", "--tail", "30", "k3s-3"},
 	// The images on each node, also when always.feature stopped before it
 	// checked them.
-	{"docker", "exec", "k3s-1", "crictl", "images", "--digests"},
-	{"docker", "exec", "k3s-2", "crictl", "images", "--digests"},
-	{"docker", "exec", "k3s-3", "crictl", "images", "--digests"},
+	{"docker", "exec", "k3s-1", "k3s", "crictl", "images", "--digests"},
+	{"docker", "exec", "k3s-2", "k3s", "crictl", "images", "--digests"},
+	{"docker", "exec", "k3s-3", "k3s", "crictl", "images", "--digests"},
 	{"kubectl", "get", "nodes", "-o", "wide"},
 	{"kubectl", "get", "pods", "-A", "-o", "wide"},
 	{"kubectl", "get", "clusters,backups,certificates,certificaterequests,orders,challenges", "-A"},
@@ -198,7 +171,7 @@ var stateCommands = [][]string{
 	{"kubectl", "describe", "cluster", clusterName, "-n", namespace},
 	{"kubectl", "get", "events", "-A", "--sort-by=.lastTimestamp"},
 	{"kubectl", "logs", "-n", "cnpg-system", "-l", "app.kubernetes.io/name=cloudnative-pg", "--tail=100", "--prefix"},
-	{"kubectl", "logs", "-n", "otel", "-l", "app.kubernetes.io/instance=otel", "--tail=20", "--prefix"},
+	{"kubectl", "logs", "-n", "otel", "-l", "app.kubernetes.io/instance=otel-agent", "--tail=20", "--prefix"},
 	{"kubectl", "logs", "-n", "cnpg-system", "-l", "app.kubernetes.io/name=plugin-barman-cloud", "--tail=50", "--prefix"},
 	// CNPG's jobs, such as a restore's full-recovery: their pods end and
 	// show only as Error otherwise.
@@ -222,16 +195,14 @@ func dumpState(ctx context.Context) string {
 	return state
 }
 
-// Where a run writes its files, in a new directory. TestScenario copies
-// them out at the end.
-const resultsDir = "/results"
-
+// results is where a scenario writes its files: results/<scenario>/ of
+// the checkout, which the e2e workflow uploads.
 type results struct {
 	dir string
 }
 
 func newResults(scenario string) (*results, error) {
-	r := &results{dir: filepath.Join(resultsDir, scenario+"-"+time.Now().UTC().Format("20060102-150405"))}
+	r := &results{dir: filepath.Join("..", "results", scenario)}
 	return r, os.MkdirAll(r.dir, 0o755)
 }
 

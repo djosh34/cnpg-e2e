@@ -18,8 +18,13 @@
 # The secrets and the company CA come only from the environment, which
 # Ansible sets. helmfile writes the values to temporary files for helm,
 # under TMPDIR, which Ansible puts on a tmpfs.
+#
+# PG_RESTORE true adds the release pg-restore: a second cluster that
+# restores the backups and WAL of pg from the store, with EAB keys of its
+# own. Ansible sets it from its variable pg_restore.
 {{- $v := readFile "../versions/versions.yaml" | fromYaml }}
 {{- $present := eq (requiredEnv "REGISTRY_PRESENT") "true" }}
+{{- $restore := eq (env "PG_RESTORE") "true" }}
 {{- $ca := requiredEnv "COMPANY_CA" }}
 
 helmDefaults:
@@ -82,7 +87,8 @@ releases:
     values:
       - values/cluster.yaml
       - values/pg.yaml
-      - postgresql:
+      - &pg
+        postgresql:
           imageName: {{ $v.postgresql.imageName | toJson }}
         cluster:
           postgresUID: {{ $v.postgresql.postgresUID }}
@@ -100,6 +106,26 @@ releases:
         objectStore:
           accessKeyID: {{ requiredEnv "BACKUP_S3_ACCESS_KEY" | toJson }}
           secretAccessKey: {{ requiredEnv "BACKUP_S3_SECRET_KEY" | toJson }}
+{{- if $restore }}
+
+  - name: pg-restore
+    namespace: databases
+    chart: ./charts/cnpg-cluster
+    needs: [databases/pg]
+    values:
+      - values/cluster.yaml
+      - values/pg.yaml
+      - *pg
+      - values/pg-restore.yaml
+      - acme:
+          eab:
+            server:
+              keyID: {{ requiredEnv "PG_RESTORE_SERVER_EAB_KID" | toJson }}
+              hmac: {{ requiredEnv "PG_RESTORE_SERVER_EAB_HMAC" | toJson }}
+            replication:
+              keyID: {{ requiredEnv "PG_RESTORE_REPLICATION_EAB_KID" | toJson }}
+              hmac: {{ requiredEnv "PG_RESTORE_REPLICATION_EAB_HMAC" | toJson }}
+{{- end }}
 
   - name: otel-client
     namespace: otel

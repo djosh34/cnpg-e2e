@@ -59,13 +59,15 @@ spec:
         - ipBlock:
             cidr: {{ index $octets 0 }}.{{ index $octets 1 }}.{{ . }}.0/32
         {{- end }}
+        {{- with .Values.rwLoadBalancer }}
         # externalTrafficPolicy Local, client entered on another node through klipper-lb.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
           podSelector:
             matchLabels:
-              svccontroller.k3s.cattle.io/svcname: {{ .Values.rwLoadBalancer.name }}
+              svccontroller.k3s.cattle.io/svcname: {{ .name }}
               svccontroller.k3s.cattle.io/svcnamespace: {{ $c.namespace }}
+        {{- end }}
       ports:
         - {protocol: TCP, port: 5432}

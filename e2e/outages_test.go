@@ -1,4 +1,4 @@
-package main
+package e2e
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/djosh34/cnpg-e2e/e2e/versions"
+	"github.com/testcontainers/testcontainers-go"
 )
 
 // fakeTools puts a docker and a kubectl first on PATH that only record how
@@ -26,10 +26,9 @@ func fakeTools(t *testing.T, more ...string) func() []string {
 		}
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	old, oldManifest := kubeconfig, manifest
+	old := kubeconfig
 	kubeconfig = filepath.Join(dir, "kubeconfig")
-	manifest = &versions.Manifest{K3s: versions.K3s{Image: "rancher/k3s:example"}}
-	t.Cleanup(func() { kubeconfig, manifest = old, oldManifest })
+	t.Cleanup(func() { kubeconfig = old })
 	if err := os.WriteFile(kubeconfig, []byte("server: https://"+nodeIP(0)+":6443\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -89,10 +88,12 @@ func TestEndOutages(t *testing.T) {
 // at its address, still leaves the store to bring back.
 func TestEndOutagesAfterAHalfStoppedStore(t *testing.T) {
 	calls := fakeTools(t,
-		`"create --name s3-gone"*) echo no address >&2; exit 1 ;;`,
+		`"run --detach --name s3-gone"*) echo no address >&2; exit 1 ;;`,
 		`"rm -f s3-gone") echo "Error response from daemon: No such container: s3-gone" >&2; exit 1 ;;`)
 	ctx := context.Background()
-	s := &scenario{}
+	s := &scenario{w: &world{lab: &lab{
+		network: &testcontainers.DockerNetwork{Name: "lab"}, images: map[string]string{"controller": "controller:example"},
+	}}}
 	if breakStore("stopped")(ctx, s, args{}) == nil {
 		t.Fatal("the stand-in failed, and the stop passed")
 	}
