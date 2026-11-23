@@ -98,10 +98,14 @@ func (s *scenario) tearDown(sn *godog.Scenario, err error) error {
 		logf("always.feature")
 		err = errors.Join(err, s.runAlways())
 	}
-	// The run's files have their own minute, the one TestScenario keeps
-	// after the scenario's deadline, so a scenario that ran out of time
+	// The run's files may take 50 s past the scenario's deadline, of the
+	// minute TestScenario keeps after it, so a scenario that ran out of time
 	// still leaves them.
-	keep, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), 50*time.Second)
+	deadline, ok := s.ctx.Deadline()
+	if !ok {
+		deadline = time.Now()
+	}
+	keep, cancel := context.WithDeadline(context.WithoutCancel(s.ctx), deadline.Add(50*time.Second))
 	defer cancel()
 	var fault error
 	if s.clientRan {
