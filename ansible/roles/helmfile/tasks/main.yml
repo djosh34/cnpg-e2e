@@ -11,6 +11,48 @@
     - "{{ deploy_dir }}/helm/upstream"
     - "{{ deploy_dir }}/versions"
 
+- name: Read the versions file
+  ansible.builtin.include_vars:
+    file: "{{ playbook_dir }}/../versions/versions.yaml"
+    name: versions
+
+# So a path gone from the checkout, such as a chart's template, is gone on
+# the node too, and a running cluster gets what a new one gets: helm/ of
+# the checkout and the upstream charts of the versions file, each a file or
+# a directory as there. Before the copy, so a file that became a directory,
+# or the other way round, is out of its way.
+- name: List helm/ on the controller
+  ansible.builtin.find:
+    paths: "{{ playbook_dir }}/../helm"
+    recurse: true
+    hidden: true
+    file_type: any
+  delegate_to: localhost
+  register: checkout
+
+- name: List helm/ on the node
+  ansible.builtin.find:
+    paths: "{{ deploy_dir }}/helm"
+    recurse: true
+    hidden: true
+    file_type: any
+  register: node
+
+- name: Remove what the checkout does not have
+  ansible.builtin.file:
+    path: "{{ deploy_dir }}/helm/{{ item }}"
+    state: absent
+  loop: "{{ have | difference(want) }}"
+  vars:
+    # A directory with a / at its end.
+    have: >-
+      {{ node.files | selectattr('isdir') | map(attribute='path') | map('relpath', deploy_dir ~ '/helm') | map('regex_replace', '$', '/') | list
+         + node.files | rejectattr('isdir') | map(attribute='path') | map('relpath', deploy_dir ~ '/helm') | list }}
+    want: >-
+      {{ checkout.files | selectattr('isdir') | map(attribute='path') | map('relpath', playbook_dir ~ '/../helm') | map('regex_replace', '$', '/') | list
+         + checkout.files | rejectattr('isdir') | map(attribute='path') | map('relpath', playbook_dir ~ '/../helm') | list
+         + ['upstream/'] + versions.charts.keys() | map('regex_replace', '^', 'upstream/') | map('regex_replace', '$', '.tgz') | list }}
+
 - name: Copy the charts and their values
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../helm/"
@@ -20,40 +62,10 @@
 
 - name: Copy the upstream charts
   ansible.builtin.copy:
-    src: "{{ downloads }}/charts/"
-    dest: "{{ deploy_dir }}/helm/upstream/"
+    src: "{{ downloads }}/charts/{{ item }}.tgz"
+    dest: "{{ deploy_dir }}/helm/upstream/{{ item }}.tgz"
     mode: "0644"
-
-# So a file gone from the checkout, such as a chart's template, is gone on
-# the node too, and a running cluster gets what a new one gets.
-- name: List the files of helm/ on the controller
-  ansible.builtin.find:
-    paths: "{{ playbook_dir }}/../helm"
-    recurse: true
-  delegate_to: localhost
-  register: helm_files
-
-- name: List the upstream charts on the controller
-  ansible.builtin.find:
-    paths: "{{ downloads }}/charts"
-  delegate_to: localhost
-  register: chart_files
-
-- name: List the files of helm/ on the node
-  ansible.builtin.find:
-    paths: "{{ deploy_dir }}/helm"
-    recurse: true
-  register: node_files
-
-- name: Remove the files the checkout does not have
-  ansible.builtin.file:
-    path: "{{ deploy_dir }}/helm/{{ item }}"
-    state: absent
-  loop: "{{ node_files.files | map(attribute='path') | map('relpath', deploy_dir ~ '/helm') | difference(wanted) }}"
-  vars:
-    wanted: >-
-      {{ helm_files.files | map(attribute='path') | map('relpath', playbook_dir ~ '/../helm') | list
-         + chart_files.files | map(attribute='path') | map('basename') | map('regex_replace', '^', 'upstream/') | list }}
+  loop: "{{ versions.charts.keys() | list }}"
 
 - name: Copy the versions file
   ansible.builtin.copy:

@@ -259,7 +259,7 @@ func (l *lab) runACME(ctx context.Context, image string, from *cache) error {
 
 // runStore starts the store, then sets it up and makes the registry's
 // bucket, with a user that may only read it, or, restored, waits until it
-// answers. Its data is in the
+// answers and sets the buckets' settings again. Its data is in the
 // container's own layer, so that docker commit keeps it.
 func (l *lab) runStore(ctx context.Context, image string, restored bool) error {
 	cert, key, err := l.root.serverCert(s3Name)
