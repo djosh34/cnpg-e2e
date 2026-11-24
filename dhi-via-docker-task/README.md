@@ -57,6 +57,7 @@ FROM dhi.io/opentelemetry-collector@sha256:c83caf23643786d88605167e77cdb95bc97c7
   may clean them up later.
 - **Requirements:** `jq`, and `ctr` with `sudo`. Microsoft-hosted Ubuntu agents
   should have both; check with `which ctr`.
-- **Tested** with Docker 29 and Docker 28.0.4 (the hosted agents' version), not
-  yet on an agent: check first that step 2 still fetches `dhi.io` after the
-  restart in step 1.
+- **Tested** on all 22 images in `versions/versions.yaml`: every pushed digest
+  equals its pin, with Docker 29 and with Docker 28.0.4 (the hosted agents'
+  version). Not yet on an agent: check first that step 2 still fetches
+  `dhi.io` after the restart in step 1.
