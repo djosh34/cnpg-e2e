@@ -52,7 +52,7 @@ FROM dhi.io/opentelemetry-collector@sha256:c83caf23643786d88605167e77cdb95bc97c7
 
 - **The script refuses rather than produce a different image.** It exits with
   an error when the store is not containerd, when the digest was not fetched,
-  when the digest is an index, or when the loaded image's ID is not the digest.
+  or when the digest is an index; `docker load` checks every file's digest.
 - **Run step 3 right after step 2.** No image holds the base's blobs, so Docker
   may clean them up later.
 - **Requirements:** `jq`, and `ctr` with `sudo`. Microsoft-hosted Ubuntu agents
